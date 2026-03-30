@@ -1,6 +1,18 @@
 # MATH310_OptimalTradingRate
 
-Figure out what we actually need to do based off of Gemini outlines, since neither is likely to be super accurate.
+Figure out what we actually need to do based off of Gemini outlines, since neither is likely to be super accurate. Here is my attempt:
+1. Lock down exact algebraic formula for the derivative of $J^{(0)}$.
+2. Discretize Heston using Euler-Maruyama
+3. Write `generate_heston_path` function
+4. Create mechanism that adjusts synthetic prices based on agent's actions, incorporating permanent and temporary market impact
+5. Code Static AC Agent (calculate trajectory upfront)
+6. Code Dynamic Agent (calculate at each time step)
+7. Build execution loop
+  a. Go through steps $k=1,\dots, N$
+  b. Create transaction log (pandas df) to record time, remaining inventory, execution price, and cash captured at every step
+  c. Calculate IS
+8. Run trade lists through to test simulations
+9. Plot mean IS to variance of IS.
 
 ## Gemini Outline 1:
 ### 1. Build the Heston Market Simulator
