@@ -1,4 +1,55 @@
 import numpy as np
+import pandas as pd
+from concurrent.futures import ProcessPoolExecutor
+def mc_worker(args): #used for the parallel batching of the montecarlo simulations
+    S0, X, T, N, sigma, eta, gamma, lambd, n_sims, seed = args
+
+    rng = np.random.default_rng(seed)
+    dt = T / N
+    sqrt_dt = np.sqrt(dt)
+
+    times = np.linspace(0, T, N + 1)
+    kappa = np.sqrt((lambd * sigma**2) / eta)
+
+    if np.isclose(kappa, 0):
+        inventory = X * (1 - times / T)
+    else:
+        inventory = X * np.sinh(kappa * (T - times)) / np.sinh(kappa * T)
+
+    trades = inventory[:-1] - inventory[1:]
+    cumulative_sold_before = np.concatenate([[0], np.cumsum(trades[:-1])])
+
+    Z = rng.standard_normal((n_sims, N)) # is this the actual distribution that we want to be using?
+    dP = sigma * sqrt_dt * Z
+
+    P = np.zeros((n_sims, N + 1))
+    P[:, 0] = S0
+    P[:, 1:] = S0 + np.cumsum(dP, axis=1)
+
+    P_start = P[:, :-1]
+    perm_prices = P_start - gamma * cumulative_sold_before
+    exec_prices = perm_prices - eta * (trades / dt)
+
+    cashflows = exec_prices * trades
+    total_cash = np.sum(cashflows, axis=1)
+
+    return X * S0 - total_cash
+
+# this is the parallel batching of the montecarlo simulations to hopefully speed up the process a decent bit
+def monte_carlo_is_parallel(S0, X, T, N, sigma, eta, gamma, lambd,
+                            n_sims=1000, n_workers=4, seed=42): # likely don't want seed hard coded
+    sims_per_worker = [n_sims // n_workers] * n_workers
+    for i in range(n_sims % n_workers):
+        sims_per_worker[i] += 1
+
+    args_list = []
+    for i, chunk in enumerate(sims_per_worker):
+        args_list.append((S0, X, T, N, sigma, eta, gamma, lambd, chunk, seed + i))
+
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        results = list(executor.map(mc_worker, args_list))
+
+    return np.concatenate(results)
 
 def generate_heston_path(S0, v0, params, T, steps, seed=None):
     """
@@ -218,7 +269,7 @@ class MarketEnvironment:
 
         return P
 
-    def simulate_unaffected_price_gbm(self, mu=0.0, seed=None):
+    def simulate_unaffected_price_gbm(self, mu=0.0, seed=None): # I highly doubt we will need this, chatgpt reccomendation
         """
         Simulate unaffected price path using Geometric Brownian Motion:
             S_k = S_{k-1} * exp((mu - 0.5*sigma^2)dt + sigma*sqrt(dt)*Z_k)
@@ -326,4 +377,195 @@ class MarketEnvironment:
         return X * self.S0 - total_cash
 
 
+class Backtester:
+    def __init__(self, strategy_model, market_env):
+        self.strategy = strategy_model
+        self.market = market_env
 
+    def run(self, seed=None, forced_liquidation_discount=0.05): # not necesarily sure if seed is needed
+        """
+        Run the backtest.
+
+        Parameters
+        ----------
+        seed : int or None
+            Random seed for unaffected price path
+        forced_liquidation_discount : float
+            Extra percentage discount applied to final forced liquidation
+            if inventory remains at T
+
+        Returns
+        -------
+        log_df : pandas.DataFrame
+            Transaction log
+        summary : dict
+            Summary statistics
+        """
+        # Strategy outputs
+        times = self.strategy.times
+        inventory_path = self.strategy.compute_inventory_trajectory()
+        trades = self.strategy.compute_trade_list()
+
+        # Market path
+        prices = self.market.simulate_unaffected_price_abm(seed=seed)
+
+        rows = []
+        cumulative_sold = 0.0
+        cumulative_cash = 0.0
+
+        for k in range(self.strategy.N):
+            t = times[k]
+            x_before = inventory_path[k]
+            n_k = trades[k]
+
+            # Unaffected price at start of interval
+            Pk = prices[k]
+
+            # Permanent impact from previously sold inventory
+            perm_price = Pk - self.market.gamma * cumulative_sold
+
+            # Temporary impact from current trade rate
+            exec_price = perm_price - self.market.eta * (n_k / self.market.dt)
+
+            cash_captured = n_k * exec_price
+            cumulative_cash += cash_captured
+            cumulative_sold += n_k
+
+            x_after = x_before - n_k
+
+            rows.append({
+                "step": k,
+                "time": t,
+                "unaffected_price": Pk,
+                "inventory_before": x_before,
+                "shares_traded": n_k,
+                "inventory_after": x_after,
+                "permanent_impact_price": perm_price,
+                "execution_price": exec_price,
+                "cash_captured": cash_captured,
+                "cumulative_cash": cumulative_cash
+            })
+
+        # Final inventory check
+        final_inventory = inventory_path[-1]
+        penalty_cash = 0.0
+        penalty_price = np.nan
+
+        if final_inventory > 1e-8:
+            # Liquidate remaining inventory at a steep penalty
+            final_market_price = prices[-1] - self.market.gamma * cumulative_sold
+            penalty_price = final_market_price * (1.0 - forced_liquidation_discount)
+            penalty_cash = final_inventory * penalty_price
+            cumulative_cash += penalty_cash
+
+            rows.append({
+                "step": self.strategy.N,
+                "time": self.strategy.T,
+                "unaffected_price": prices[-1],
+                "inventory_before": final_inventory,
+                "shares_traded": final_inventory,
+                "inventory_after": 0.0,
+                "permanent_impact_price": final_market_price,
+                "execution_price": penalty_price,
+                "cash_captured": penalty_cash,
+                "cumulative_cash": cumulative_cash
+            })
+
+        log_df = pd.DataFrame(rows)
+
+        initial_value = self.strategy.X * self.market.S0
+        implementation_shortfall = initial_value - cumulative_cash
+
+        summary = {
+            "initial_portfolio_value": initial_value,
+            "total_cash_received": cumulative_cash,
+            "implementation_shortfall": implementation_shortfall,
+            "final_inventory": max(0.0, final_inventory),
+            "penalty_cash": penalty_cash,
+            "penalty_price": penalty_price
+        }
+
+        return log_df, summary
+
+class MonteCarloSimulator:
+    def __init__(self, S0, X, T, N, sigma, eta, gamma):
+        self.S0 = S0
+        self.X = X
+        self.T = T
+        self.N = N
+        self.sigma = sigma
+        self.eta = eta
+        self.gamma = gamma
+
+    def run_single_lambda(self, lambd, n_sims=1000, seed=None): #very likely this function will be too slow and not needed
+        """
+        Run Monte Carlo for one lambda value.
+        Returns implementation shortfall samples and summary stats.
+        """
+        rng = np.random.default_rng(seed)
+
+        strategy = AlmgrenChrissModel(
+            X=self.X,
+            T=self.T,
+            N=self.N,
+            sigma=self.sigma,
+            lambd=lambd,
+            eta=self.eta,
+            gamma=self.gamma
+        )
+
+        market = MarketEnvironment(
+            S0=self.S0,
+            sigma=self.sigma,
+            T=self.T,
+            N=self.N,
+            gamma=self.gamma,
+            eta=self.eta
+        )
+
+        trades = strategy.compute_trade_list()
+        inventory = strategy.compute_inventory_trajectory()
+
+        is_samples = np.zeros(n_sims)
+
+        for i in range(n_sims):
+            price_path = market.simulate_unaffected_price_abm(rng=rng)
+            _, total_cash = market.execute_trades(price_path, trades)
+            is_samples[i] = market.implementation_shortfall(self.X, total_cash)
+
+        result = {
+            "lambda": lambd,
+            "kappa": strategy.compute_kappa(),
+            "trade_list": trades,
+            "inventory_path": inventory,
+            "is_samples": is_samples,
+            "mean_is": np.mean(is_samples),
+            "var_is": np.var(is_samples, ddof=1),
+            "std_is": np.std(is_samples, ddof=1)
+        }
+
+        return result
+
+    def run_lambda_grid(self, lambda_values, n_sims=1000, seed=None): #likelhy same here
+        """
+        Run Monte Carlo across many lambda values.
+        Returns DataFrame with mean and variance of IS for each lambda.
+        """
+        results = []
+
+        for j, lambd in enumerate(lambda_values):
+            res = self.run_single_lambda(
+                lambd=lambd,
+                n_sims=n_sims,
+                seed=None if seed is None else seed + j
+            )
+
+            results.append({
+                "lambda": lambd,
+                "mean_is": res["mean_is"],
+                "var_is": res["var_is"],
+                "std_is": res["std_is"],
+                "kappa": res["kappa"]
+            })
+
+        return pd.DataFrame(results)
