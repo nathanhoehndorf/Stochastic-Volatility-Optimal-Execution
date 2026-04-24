@@ -159,4 +159,4 @@ class MarketEnvironment:
         float
             Implementation shortfall
         """
-        return X * self.S0 - total_cash
+        return X * self.S0 - int(total_cash)

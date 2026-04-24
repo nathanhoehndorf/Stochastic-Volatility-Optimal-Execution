@@ -1,5 +1,5 @@
-import AlmgrenChrissModel
-import MarketEnvironment
+import AlmgrenChrissModel as ac
+import MarketEnvironment as me
 import numpy as np
 import pandas as pd
 
@@ -20,7 +20,7 @@ class MonteCarloSimulator:
         """
         rng = np.random.default_rng(seed)
 
-        strategy = AlmgrenChrissModel(
+        strategy = ac.AlmgrenChrissModel(
             X=self.X,
             T=self.T,
             N=self.N,
@@ -30,7 +30,7 @@ class MonteCarloSimulator:
             gamma=self.gamma
         )
 
-        market = MarketEnvironment(
+        market = me.MarketEnvironment(
             S0=self.S0,
             sigma=self.sigma,
             T=self.T,
@@ -45,8 +45,9 @@ class MonteCarloSimulator:
         is_samples = np.zeros(n_sims)
 
         for i in range(n_sims):
-            price_path = market.simulate_unaffected_price_abm(rng=rng)
-            _, total_cash = market.execute_trades(price_path, trades)
+            price_path = market.simulate_unaffected_price_abm(seed=seed)
+            total_cash = market.apply_market_impact(price_path, trades) # make new function? Find other name in MarketEnvironment? 
+            total_cash = total_cash['total_cash']
             is_samples[i] = market.implementation_shortfall(self.X, total_cash)
 
         result = {

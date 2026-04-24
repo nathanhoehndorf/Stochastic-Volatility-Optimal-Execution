@@ -46,16 +46,15 @@ class AlmgrenChrissModel:
         """
         kappa = self.compute_kappa()
 
-        # Handle kappa near zero to avoid division problems
-        if np.isclose(kappa, 0):
-            # Linear liquidation limit
-            return self.X * (1 - self.times / self.T)
+        tau = self.T - self.times
+        T = self.T
 
-        numerator = np.sinh(kappa * (self.T - self.times))
-        denominator = np.sinh(kappa * self.T)
-
-        x = self.X * numerator / denominator
-        return x
+        if np.any(kappa * T > 700):
+            log_ratio = -kappa * (T-tau)
+            adjustment = (1-np.exp(-2*kappa*tau))/(1-np.exp(-2*kappa*T))
+            return self.X * np.exp(log_ratio) * adjustment
+        else:
+            return self.X * np.sinh(kappa*tau)/np.sinh(kappa*T)
 
     def compute_trade_list(self):
         """
