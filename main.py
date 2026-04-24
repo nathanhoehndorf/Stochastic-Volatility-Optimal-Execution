@@ -96,17 +96,14 @@ def build_objects(params, lambd):
 
     return strategy, env, sim, back
 
-
 def optimize_lambda(params):
     print("\nLambda optimization")
 
     min_lambda = get_float("Minimum lambda", 0.01)
     max_lambda = get_float("Maximum lambda", 2.0)
-    num_values = get_int("Number of lambda values to test", 20)
+    num_values = get_int("Number of lambda values per search", 20)
     n_sims = get_int("Monte Carlo simulations per lambda", 1000)
     risk_penalty = get_float("Risk penalty on std implementation shortfall", 1.0)
-
-    lambda_values = np.linspace(min_lambda, max_lambda, num_values)
 
     sim = m.MonteCarloSimulator(
         S0=params["S0"],
@@ -118,19 +115,51 @@ def optimize_lambda(params):
         gamma=params["gamma"]
     )
 
-    results_df = sim.run_lambda_grid(lambda_values, n_sims=n_sims, seed=42)
+    # ----- Step 1: coarse search -----
+    coarse_lambda_values = np.linspace(min_lambda, max_lambda, num_values)
 
-    results_df["objective"] = (
-        results_df["mean_is"]
-        + risk_penalty * results_df["std_is"]
+    coarse_results = sim.run_lambda_grid(
+        coarse_lambda_values,
+        n_sims=n_sims,
+        seed=42
     )
-    print(f"Objective = mean_is + {risk_penalty} * std_is")
-    best_row = results_df.loc[results_df["objective"].idxmin()]
 
-    display_lambda_results(results_df, best_row)
+    coarse_results["objective"] = (
+        coarse_results["mean_is"] + risk_penalty * coarse_results["std_is"]
+    )
 
-    return best_row, results_df
+    coarse_best = coarse_results.loc[coarse_results["objective"].idxmin()]
+    best_lambda = coarse_best["lambda"]
 
+    # ----- Step 2: refined search around best coarse lambda -----
+    refine_width = (max_lambda - min_lambda) / num_values
+
+    refined_min = max(min_lambda, best_lambda - refine_width)
+    refined_max = min(max_lambda, best_lambda + refine_width)
+
+    refined_lambda_values = np.linspace(refined_min, refined_max, num_values)
+
+    refined_results = sim.run_lambda_grid(
+        refined_lambda_values,
+        n_sims=n_sims,
+        seed=123
+    )
+
+    refined_results["objective"] = (
+        refined_results["mean_is"] + risk_penalty * refined_results["std_is"]
+    )
+
+    best_row = refined_results.loc[refined_results["objective"].idxmin()]
+
+    print("\nCoarse search best lambda:")
+    print(coarse_best)
+
+    print("\nRefined search range:")
+    print(f"{refined_min:.6f} to {refined_max:.6f}")
+
+    display_lambda_results(refined_results, best_row)
+
+    return best_row, refined_results
 
 def run_single_backtest(params):
     lambd = get_float("Lambda", 0.5)
