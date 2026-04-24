@@ -31,7 +31,14 @@ class Backtester:
         trades = self.strategy.compute_trade_list()
 
         # Market path
-        prices = self.market.simulate_unaffected_price_abm(seed=seed)
+        prices, variances = self.market.simulate_unaffected_price_heston(
+        v0=0.04,
+        mu=0.0,
+        theta=2.0,
+        omega=0.04,
+        xi=0.3,
+        rho=-0.7,
+        seed=seed)
 
         rows = []
         cumulative_sold = 0.0

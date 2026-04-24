@@ -45,7 +45,14 @@ class MonteCarloSimulator:
         is_samples = np.zeros(n_sims)
 
         for i in range(n_sims):
-            price_path = market.simulate_unaffected_price_abm(seed=seed)
+            price_path, variance_path = market.simulate_unaffected_price_heston(
+            v0=0.04,
+            mu=0.0,
+            theta=2.0,
+            omega=0.04,
+            xi=0.3,
+            rho=-0.7,
+            seed=None if seed is None else rng.integers(0, 1_000_000_000)) # may want different interaction with the seed here than currently present
             total_cash = market.apply_market_impact(price_path, trades) # make new function? Find other name in MarketEnvironment? 
             total_cash = total_cash['total_cash']
             is_samples[i] = market.implementation_shortfall(self.X, total_cash)
