@@ -159,6 +159,11 @@ def optimize_lambda(params):
 
     display_lambda_results(refined_results, best_row)
 
+    show_plot = input("\nShow plot? (y/n): ").strip().lower()
+
+    if show_plot == "y":
+        plot_lambda_results(refined_results)
+
     return best_row, refined_results
 
 def run_single_backtest(params):
