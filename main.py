@@ -3,7 +3,34 @@ import Backtester as b
 import MarketEnvironment as me
 import AlmgrenChrissModel as ac
 import numpy as np
+import matplotlib.pyplot as plt
 
+def plot_lambda_results(results):
+    plt.figure()
+    plt.plot(results["lambda"], results["mean_is"], marker="o", label="Mean IS")
+    plt.plot(results["lambda"], results["std_is"], marker="o", label="Std IS")
+    plt.plot(results["lambda"], results["objective"], marker="o", label="Objective")
+
+    plt.xlabel("Lambda")
+    plt.ylabel("Value")
+    plt.title("Lambda Optimization Results")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+def display_lambda_results(results, best):
+    print("\n========== LAMBDA OPTIMIZATION RESULTS ==========")
+
+    print("\nBest lambda:")
+    print(f"  lambda: {best['lambda']:.6f}")
+    print(f"  objective: {best['objective']:.6f}")
+    print(f"  mean implementation shortfall: {best['mean_is']:.6f}")
+    print(f"  std implementation shortfall: {best['std_is']:.6f}")
+    print(f"  kappa: {best['kappa']:.6f}")
+
+    print("\nFull lambda grid:")
+    display_cols = ["lambda", "mean_is", "std_is", "objective", "kappa"]
+    print(results[display_cols].to_string(index=False))
 
 def get_float(prompt, default):
     user_input = input(f"{prompt} [{default}]: ").strip()
@@ -94,16 +121,13 @@ def optimize_lambda(params):
     results_df = sim.run_lambda_grid(lambda_values, n_sims=n_sims, seed=42)
 
     results_df["objective"] = (
-        results_df["mean_is"] + risk_penalty * results_df["std_is"]
+        results_df["mean_is"]
+        + risk_penalty * results_df["std_is"]
     )
-
+    print(f"Objective = mean_is + {risk_penalty} * std_is")
     best_row = results_df.loc[results_df["objective"].idxmin()]
 
-    print("\nLambda grid results:")
-    print(results_df)
-
-    print("\nBest lambda:")
-    print(best_row)
+    display_lambda_results(results_df, best_row)
 
     return best_row, results_df
 
