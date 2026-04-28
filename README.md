@@ -30,7 +30,7 @@ Where $J^{(0)}$ recovers the original Almgren-Chriss solution and $J^{(1)}$ prov
 - **Regime Sensitivity**: Automated analysis of how the model performs in high-initial-volatility vs. mean-reverting environments.
 
 ## Project Structure
-
+```
 ├── core/
 │   ├── AlmgrenChrissModel.py     # Base AC and Perturbed Heston logic
 │   ├── MarketEnvironment.py      # SDE Integrators for GBM and Heston
@@ -40,6 +40,7 @@ Where $J^{(0)}$ recovers the original Almgren-Chriss solution and $J^{(1)}$ prov
 │   └── statistics.py             # Hypothesis testing and CVaR suite
 ├── main.py                       # Research interface and CLI
 └── Research_Paper.pdf            # Full derivation and mathematical proof
+```
 
 ## Implementation Note
 This project was developed for MATH310: Introduction to Mathematical Modeling at the Colorado School of Mines. It represents a move away from heuristic-based trading toward a mathematically rigorous derivation of execution logic under stochastic regimes.
