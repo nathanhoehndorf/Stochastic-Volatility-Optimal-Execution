@@ -1,5 +1,5 @@
-import AlmgrenChrissModel as ac
-import MarketEnvironment as me
+import core.AlmgrenChrissModel as ac
+import core.MarketEnvironment as me
 import numpy as np
 import pandas as pd
 

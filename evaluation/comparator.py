@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from evaluation.statistics import calculate_test_suite
-from MonteCarloSimulator import MonteCarloSimulator
+from core.MonteCarloSimulator import MonteCarloSimulator
 
 class ModelComparator:
     def __init__(self, model_ac, model_hest, market_env, num_sims=1000, seed=None):
