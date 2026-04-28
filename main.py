@@ -2,6 +2,8 @@ import MonteCarloSimulator as m
 import Backtester as b
 import MarketEnvironment as me
 import AlmgrenChrissModel as ac
+from evaluation.comparator import ModelComparator
+from evaluation.statistics import print_results
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -195,6 +197,55 @@ def run_single_lambda_mc(params):
     print(f"std implementation shortfall: {result['std_is']}")
     print(f"variance implementation shortfall: {result['var_is']}")
 
+class HestonParameters:
+    def __init__(self, v0, mu, theta, omega, xi, rho):
+        self.v0 = v0
+        self.mu = mu
+        self.theta = theta
+        self.omega = omega
+        self.xi = xi
+        self.rho = rho
+
+def run_model_comparison(params):
+    print("\n========== HESTON VS AC MODEL COMPARISON ==========")
+    lambd = get_float("Lambda for AC strategy", 0.5)
+    n_sims = get_int("Number of simulations for comparison", 1000)
+
+    print("\nEnter Heston Model Parameters:")
+    heston_model = HestonParameters(
+        v0=get_float("Initial variance (v0)", 0.04),
+        mu=get_float("Drift (mu)", 0.0),
+        theta=get_float("Mean reversion rate (theta/kappa)", 2.0),
+        omega=get_float("Long-term variance (omega)", 0.04),
+        xi=get_float("Volatility of volatility (xi)", 0.3),
+        rho=get_float("Correlation (rho)", -0.7)
+    )
+
+    # Build base objects
+    strategy, env, _, _ = build_objects(params, lambd)
+
+    # Initialize the Comparator
+    comp = ModelComparator(
+        model_ac=strategy,
+        model_hest=heston_model,
+        market_env=env,
+        num_sims=n_sims,
+        seed=42
+    )
+
+    print(f"\nRunning {n_sims} paired simulations. This may take a moment...")
+    
+    # Run the suite and print results
+    results = comp.run_comparison()
+    print_results(results)
+
+    # Show generated figures
+    if "figures" in results:
+        show_plot = input("\nShow evaluation plots? (y/n): ").strip().lower()
+        if show_plot == "y":
+            for name, fig in results["figures"].items():
+                fig.show()
+            plt.show()
 
 def main():
     params = get_base_parameters()
@@ -205,7 +256,8 @@ def main():
         print("2. Run Monte Carlo for one lambda")
         print("3. Optimize lambda with grid search")
         print("4. Change base parameters")
-        print("5. Quit")
+        print("5. Run model comparison suite")
+        print("6. Quit")
 
         choice = input("Choose an option: ").strip()
 
@@ -222,6 +274,9 @@ def main():
             params = get_base_parameters()
 
         elif choice == "5":
+            run_model_comparison(params)
+
+        elif choice == "6":
             print("Goodbye.")
             break
 
