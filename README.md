@@ -33,14 +33,25 @@ Where $J^{(0)}$ recovers the original Almgren-Chriss solution and $J^{(1)}$ prov
 ```
 ├── core/
 │   ├── AlmgrenChrissModel.py     # Base AC and Perturbed Heston logic
+│   ├── Backtester.py             # Single-path strategy/backtest routines
 │   ├── MarketEnvironment.py      # SDE Integrators for GBM and Heston
 │   └── MonteCarloSimulator.py    # Simulation engine
+├── data/
+│   ├── calibrator.py             # LOBSTER-based impact and Heston parameter estimation
+│   └── _files/                   # Sample LOBSTER dataset archives
 ├── evaluation/
 │   ├── comparator.py             # Orchestrates paired-path experiments
 │   └── statistics.py             # Hypothesis testing and CVaR suite
 ├── main.py                       # Research interface and CLI
-└── Research_Paper.pdf            # Full derivation and mathematical proof
+└── README.md                     # Project documentation
 ```
+
+## Data-Driven Calibration
+This project now includes a data calibration workflow that uses historical limit order book data to ground the model parameters in market microstructure.
+
+- **Temporary impact (`eta`)** is estimated by integrating available liquidity across price levels and regressing the observed execution impact against trade size.
+- **Permanent impact (`gamma`)** is estimated from order-flow imbalance and its relationship with mid-price changes over fixed intervals.
+- **Heston parameters** are inferred from realized volatility dynamics using high-frequency mid-price returns. The calibrator estimates initial variance (`v0`), long-term variance (`theta`), mean-reversion speed (`omega`), volatility of volatility (`xi`), and leverage correlation (`rho`).
 
 ## Implementation Note
 This project was developed for MATH310: Introduction to Mathematical Modeling at the Colorado School of Mines. It represents a move away from heuristic-based trading toward a mathematically rigorous derivation of execution logic under stochastic regimes.

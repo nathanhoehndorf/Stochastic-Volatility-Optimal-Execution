@@ -56,9 +56,9 @@ def get_base_parameters():
         "X": get_float("Shares to execute X", 30),
         "T": get_float("Trading horizon T", 10),
         "N": get_int("Number of intervals N", 40),
-        "sigma": get_float("Volatility sigma", 55),
-        "eta": get_float("Temporary impact eta", 0.05),
-        "gamma": get_float("Permanent impact gamma", 0.1),
+        "sigma": get_float("Volatility sigma", 0.06),
+        "eta": get_float("Temporary impact eta", 0.005),
+        "gamma": get_float("Permanent impact gamma", 0.0000047),
     }
 
     return params
@@ -249,6 +249,8 @@ def run_model_comparison(params):
 
 def main():
     params = get_base_parameters()
+
+    # Prompt user for dataset, calibrate on chosen dataset.
 
     while True:
         print("\n========== MAIN MENU ==========")
