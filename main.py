@@ -1,7 +1,9 @@
+import os
 import core.MonteCarloSimulator as m
 import core.Backtester as b
 import core.MarketEnvironment as me
 import core.AlmgrenChrissModel as ac
+from data.calibrator import LobsterCalibrator
 from evaluation.comparator import ModelComparator
 from evaluation.statistics import print_results
 import numpy as np
@@ -48,17 +50,85 @@ def get_int(prompt, default):
     return int(user_input)
 
 
-def get_base_parameters():
+def list_zip_datasets():
+    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "data", "_files"))
+    if not os.path.isdir(data_dir):
+        return []
+    return sorted([f for f in os.listdir(data_dir) if f.lower().endswith('.zip')])
+
+
+def choose_dataset():
+    datasets = list_zip_datasets()
+    if not datasets:
+        print("No LOBSTER dataset archives found in data/_files.")
+        return None
+
+    print("\nChoose a LOBSTER dataset for parameter calibration:")
+    for idx, name in enumerate(datasets, start=1):
+        print(f"{idx}. {name}")
+    print("0. Skip dataset calibration")
+
+    choice = get_int("Select dataset", 1)
+    if choice <= 0 or choice > len(datasets):
+        print("Skipping dataset calibration.")
+        return None
+
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "data", "_files", datasets[choice - 1]))
+
+
+def estimate_parameters_from_dataset(dataset_path):
+    print(f"\nEstimating parameters from dataset: {os.path.basename(dataset_path)}")
+    calibrator = LobsterCalibrator.from_zip(dataset_path)
+    df = calibrator.load_data()
+
+    sigma = calibrator.estimate_volatility(df)
+    impact_params = calibrator.estimate_impact_parameters(df)
+    heston_params = calibrator.estimate_heston_parameters(df)
+
+    defaults = {
+        "S0": float(df["Mid_Price"].iloc[0]) if "Mid_Price" in df.columns else 375,
+        "sigma": sigma if sigma is not None else 0.06,
+        "eta": impact_params.get("eta") if impact_params else 0.005,
+        "gamma": impact_params.get("gamma") if impact_params else 0.0000047,
+        "heston": heston_params if heston_params is not None else {
+            "v0": 0.04,
+            "mu": 0.0,
+            "theta": 2.0,
+            "omega": 0.04,
+            "xi": 0.3,
+            "rho": -0.7,
+        }
+    }
+
+    print("Estimated calibration defaults:")
+    print(f"  S0 = {defaults['S0']:.2f}")
+    print(f"  sigma = {defaults['sigma']:.6f}")
+    print(f"  eta = {defaults['eta']:.6f}")
+    print(f"  gamma = {defaults['gamma']:.8f}")
+
+    return defaults
+
+
+def get_base_parameters(defaults=None):
+    defaults = defaults or {}
     print("\nEnter simulation parameters. Press Enter to use defaults.\n")
 
     params = {
-        "S0": get_float("Initial stock price S0", 375),
-        "X": get_float("Shares to execute X", 30),
-        "T": get_float("Trading horizon T", 10),
-        "N": get_int("Number of intervals N", 40),
-        "sigma": get_float("Volatility sigma", 0.06),
-        "eta": get_float("Temporary impact eta", 0.005),
-        "gamma": get_float("Permanent impact gamma", 0.0000047),
+        "S0": get_float("Initial stock price S0", defaults.get("S0", 375)),
+        "X": get_float("Shares to execute X", defaults.get("X", 30)),
+        "T": get_float("Trading horizon T", defaults.get("T", 10)),
+        "N": get_int("Number of intervals N", defaults.get("N", 40)),
+        "sigma": get_float("Volatility sigma", defaults.get("sigma", 0.06)),
+        "eta": get_float("Temporary impact eta", defaults.get("eta", 0.005)),
+        "gamma": get_float("Permanent impact gamma", defaults.get("gamma", 0.0000047)),
+        "heston": defaults.get("heston", {
+            "v0": 0.04,
+            "mu": 0.0,
+            "theta": 2.0,
+            "omega": 0.04,
+            "xi": 0.3,
+            "rho": -0.7,
+        })
     }
 
     return params
@@ -212,13 +282,14 @@ def run_model_comparison(params):
     n_sims = get_int("Number of simulations for comparison", 1000)
 
     print("\nEnter Heston Model Parameters:")
+    heston_defaults = params.get("heston", {})
     heston_model = HestonParameters(
-        v0=get_float("Initial variance (v0)", 0.04),
-        mu=get_float("Drift (mu)", 0.0),
-        theta=get_float("Mean reversion rate (theta/kappa)", 2.0),
-        omega=get_float("Long-term variance (omega)", 0.04),
-        xi=get_float("Volatility of volatility (xi)", 0.3),
-        rho=get_float("Correlation (rho)", -0.7)
+        v0=get_float("Initial variance (v0)", heston_defaults.get("v0", 0.04)),
+        mu=get_float("Drift (mu)", heston_defaults.get("mu", 0.0)),
+        theta=get_float("Mean reversion rate (theta/kappa)", heston_defaults.get("theta", 2.0)),
+        omega=get_float("Long-term variance (omega)", heston_defaults.get("omega", 0.04)),
+        xi=get_float("Volatility of volatility (xi)", heston_defaults.get("xi", 0.3)),
+        rho=get_float("Correlation (rho)", heston_defaults.get("rho", -0.7))
     )
 
     # Build base objects
@@ -248,9 +319,12 @@ def run_model_comparison(params):
             plt.show()
 
 def main():
-    params = get_base_parameters()
+    selected_dataset = choose_dataset()
+    defaults = None
+    if selected_dataset is not None:
+        defaults = estimate_parameters_from_dataset(selected_dataset)
 
-    # Prompt user for dataset, calibrate on chosen dataset.
+    params = get_base_parameters(defaults=defaults)
 
     while True:
         print("\n========== MAIN MENU ==========")
@@ -273,7 +347,7 @@ def main():
             optimize_lambda(params)
 
         elif choice == "4":
-            params = get_base_parameters()
+            params = get_base_parameters(defaults=params)
 
         elif choice == "5":
             run_model_comparison(params)

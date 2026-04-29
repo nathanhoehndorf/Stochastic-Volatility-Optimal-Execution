@@ -1,14 +1,42 @@
 # We calibrate temporary impact by integrating the volume at each price level until your trade of size X is filled, and regressing against various trade sizes gives eta
 # We calibrate permanent impact by calculating either order flow imbalance or net signed volume over an interval and regression one against the change in mid-price.
 
+import os
+import zipfile
 import pandas as pd
 import numpy as np
 
 class LobsterCalibrator:
-    def __init__(self, message_path: str, orderbook_path: str, levels: int = 50):
+    def __init__(self, message_path: str, orderbook_path: str = None, levels: int = 50):
         self.message_path = message_path
         self.orderbook_path = orderbook_path
         self.levels = levels
+
+    @classmethod
+    def from_zip(cls, archive_path: str, levels: int = 50):
+        """Create a calibrator from a LOBSTER zip archive."""
+        if not archive_path.lower().endswith('.zip'):
+            raise ValueError("Archive path must be a .zip file")
+
+        with zipfile.ZipFile(archive_path, 'r') as archive:
+            names = archive.namelist()
+            orderbook_file = next((n for n in names if '_orderbook_' in n), None)
+            message_file = next((n for n in names if '_message_' in n), None)
+
+            if orderbook_file is None or message_file is None:
+                raise ValueError("Zip archive does not contain expected LOBSTER orderbook/message files")
+
+        return cls(message_path=archive_path, orderbook_path=archive_path, levels=levels)
+
+    def _open_csv(self, path: str, names):
+        if path.lower().endswith('.zip'):
+            with zipfile.ZipFile(path, 'r') as archive:
+                file_name = next((n for n in archive.namelist() if any(tag in n for tag in ['_message_', '_orderbook_'])), None)
+                if file_name is None:
+                    raise ValueError(f"No matching CSV found in archive {path}")
+                with archive.open(file_name) as file:
+                    return pd.read_csv(file, names=names)
+        return pd.read_csv(path, names=names)
 
     def load_data(self) -> pd.DataFrame:
         """Loads and aligns message and orderbook data."""
@@ -19,10 +47,23 @@ class LobsterCalibrator:
             ob_cols.extend([f"Ask_Price_{i}", f"Ask_Size_{i}", f"Bid_Price_{i}", f"Bid_Size_{i}"])
 
         print("Loading message file...")
-        messages = pd.read_csv(self.message_path, names=msg_cols)
+        if self.message_path.lower().endswith('.zip'):
+            with zipfile.ZipFile(self.message_path, 'r') as archive:
+                message_file = next((n for n in archive.namelist() if '_message_' in n), None)
+                if message_file is None:
+                    raise ValueError("Zip archive does not contain a message file")
+                with archive.open(message_file) as file:
+                    messages = pd.read_csv(file, names=msg_cols)
 
-        print("Loading orderbook file...")
-        orderbook = pd.read_csv(self.orderbook_path, names=ob_cols) / 10000.0
+                print("Loading orderbook file...")
+                orderbook_file = next((n for n in archive.namelist() if '_orderbook_' in n), None)
+                if orderbook_file is None:
+                    raise ValueError("Zip archive does not contain an orderbook file")
+                with archive.open(orderbook_file) as file:
+                    orderbook = pd.read_csv(file, names=ob_cols) / 10000.0
+        else:
+            messages = pd.read_csv(self.message_path, names=msg_cols)
+            orderbook = pd.read_csv(self.orderbook_path, names=ob_cols) / 10000.0
 
         df = pd.concat([messages, orderbook], axis=1)
 
