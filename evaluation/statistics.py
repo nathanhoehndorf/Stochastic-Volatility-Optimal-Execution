@@ -85,13 +85,24 @@ def calculate_test_suite(is_ac: np.ndarray, is_hest: np.ndarray, starting_vols: 
     }
 
     # Wilcoxon signed-rank test (non-parametric mean test)
-    w_stat, p_wilcox = wilcoxon(diff, alternative="greater")
-    results["wilcoxon_signed_rank"] = {
-        "description": "Wilcoxon signed-rank: H0 median(AC-Hest)=0 vs H1 > 0",
-        "statistic": float(w_stat),
-        "p_value": float(p_wilcox),
-        "reject_H0": p_wilcox < alpha_test
-    }
+    # Check if all differences are zero (cannot run Wilcoxon in this case)
+    non_zero_diff = diff[diff != 0]
+    if len(non_zero_diff) == 0 or np.allclose(diff, 0):
+        results["wilcoxon_signed_rank"] = {
+            "description": "Wilcoxon signed-rank: H0 median(AC-Hest)=0 vs H1 > 0",
+            "statistic": None,
+            "p_value": None,
+            "warning": "All differences are zero; Wilcoxon test cannot be performed",
+            "reject_H0": False
+        }
+    else:
+        w_stat, p_wilcox = wilcoxon(diff, alternative="greater")
+        results["wilcoxon_signed_rank"] = {
+            "description": "Wilcoxon signed-rank: H0 median(AC-Hest)=0 vs H1 > 0",
+            "statistic": float(w_stat),
+            "p_value": float(p_wilcox),
+            "reject_H0": p_wilcox < alpha_test
+        }
 
     # Levene's test for equal variance, H0: sigma^2_AC = sigma^2_Hest   H1: sigma^2_AC > sigma^2_Hest
     lev_stat, p_lev_two = levene(is_ac, is_hest)
@@ -143,15 +154,29 @@ def calculate_test_suite(is_ac: np.ndarray, is_hest: np.ndarray, starting_vols: 
                 results["regime_analysis"][regime_labels[i]] = {"warning": "too few samples"}
                 continue
  
-            w_r, p_r = wilcoxon(ac_r - hest_r, alternative="greater")
-            results["regime_analysis"][regime_labels[i]] = {
-                "vol_range":   (float(lo), float(hi)),
-                "n_samples":   int(mask.sum()),
-                "median_diff": float(np.median(ac_r - hest_r)),
-                "wilcoxon_stat": float(w_r),
-                "p_value":     float(p_r),
-                "reject_H0":   p_r < alpha_test,
-            }
+            regime_diff = ac_r - hest_r
+            # Check if all differences are zero (cannot run Wilcoxon in this case)
+            non_zero_regime = regime_diff[regime_diff != 0]
+            if len(non_zero_regime) == 0 or np.allclose(regime_diff, 0):
+                results["regime_analysis"][regime_labels[i]] = {
+                    "vol_range":   (float(lo), float(hi)),
+                    "n_samples":   int(mask.sum()),
+                    "median_diff": float(np.median(regime_diff)),
+                    "wilcoxon_stat": None,
+                    "p_value":     None,
+                    "warning":     "All differences are zero; Wilcoxon test cannot be performed",
+                    "reject_H0":   False,
+                }
+            else:
+                w_r, p_r = wilcoxon(regime_diff, alternative="greater")
+                results["regime_analysis"][regime_labels[i]] = {
+                    "vol_range":   (float(lo), float(hi)),
+                    "n_samples":   int(mask.sum()),
+                    "median_diff": float(np.median(regime_diff)),
+                    "wilcoxon_stat": float(w_r),
+                    "p_value":     float(p_r),
+                    "reject_H0":   p_r < alpha_test,
+                }
 
     # Leverage effect sensitivity
     if rho_sweep is not None:
@@ -301,9 +326,13 @@ def print_results(results: dict, alpha_test: float = 0.05) -> None:
     # 2. Wilcoxon
     r = results["wilcoxon_signed_rank"]
     print(f"{sep}\n2. Wilcoxon Signed-Rank Test\n{sep}")
-    print(f"   Statistic           : {r['statistic']:.4f}")
-    print(f"   p-value (one-sided) : {r['p_value']:.4f}")
-    print(f"   Reject H0           : {r['reject_H0']}\n")
+    if r['statistic'] is None:
+        print(f"   Warning             : {r.get('warning', 'Cannot perform test')}")
+        print(f"   Reject H0           : {r['reject_H0']}\n")
+    else:
+        print(f"   Statistic           : {r['statistic']:.4f}")
+        print(f"   p-value (one-sided) : {r['p_value']:.4f}")
+        print(f"   Reject H0           : {r['reject_H0']}\n")
  
     # 3. Levene
     r = results["levene_variance"]
@@ -325,7 +354,7 @@ def print_results(results: dict, alpha_test: float = 0.05) -> None:
     print(f"{sep}\n5. CVaR / Expected Shortfall\n{sep}")
     for key, r in results["cvar"].items():
         print(f"   [{key}]  CVaR_AC={r['cvar_ac']:.5f}  CVaR_Hest={r['cvar_hest']:.5f}")
-        print(f"          Diff={r['observed_diff']:.5f}  "
+        print(f"          Diff={r['obs_diff']:.5f}  "
               f"95% CI=[{r['bootstrap_ci'][0]:.5f}, {r['bootstrap_ci'][1]:.5f}]")
         print(f"          p-value={r['p_value']:.4f}  Reject H0: {r['reject_H0']}\n")
  
