@@ -103,8 +103,14 @@ def estimate_parameters_from_dataset(dataset_path):
     print("Estimated calibration defaults:")
     print(f"  S0 = {defaults['S0']:.2f}")
     print(f"  sigma = {defaults['sigma']:.6f}")
-    print(f"  eta = {defaults['eta']:.6f}")
-    print(f"  gamma = {defaults['gamma']:.8f}")
+    if defaults['eta'] is not None:
+        print(f"  eta = {defaults['eta']:.6f}")
+    else:
+        print("  eta = (estimation failed, using default)")
+    if defaults['gamma'] is not None:
+        print(f"  gamma = {defaults['gamma']:.8f}")
+    else:
+        print("  gamma = (estimation failed, using default)")
 
     return defaults
 

@@ -13,7 +13,7 @@ class LobsterCalibrator:
         self.levels = levels
 
     @classmethod
-    def from_zip(cls, archive_path: str, levels: int = 50):
+    def from_zip(cls, archive_path: str):
         """Create a calibrator from a LOBSTER zip archive."""
         if not archive_path.lower().endswith('.zip'):
             raise ValueError("Archive path must be a .zip file")
@@ -25,6 +25,17 @@ class LobsterCalibrator:
 
             if orderbook_file is None or message_file is None:
                 raise ValueError("Zip archive does not contain expected LOBSTER orderbook/message files")
+            
+            # Extract levels from filename (e.g., "_5" from "orderbook_5.csv")
+            import re
+            level_match = re.search(r'_(\d+)\.csv', orderbook_file)
+            if level_match:
+                levels = int(level_match.group(1))
+            else:
+                # Fallback: count columns in first line
+                with archive.open(orderbook_file) as file:
+                    first_line = file.readline().decode('utf-8').strip()
+                    levels = len(first_line.split(',')) // 4  # 4 columns per level
 
         return cls(message_path=archive_path, orderbook_path=archive_path, levels=levels)
 
@@ -53,14 +64,20 @@ class LobsterCalibrator:
                 if message_file is None:
                     raise ValueError("Zip archive does not contain a message file")
                 with archive.open(message_file) as file:
-                    messages = pd.read_csv(file, names=msg_cols)
+                    # Read as text to avoid pandas buffer issues
+                    content = file.read().decode('utf-8')
+                    from io import StringIO
+                    messages = pd.read_csv(StringIO(content), names=msg_cols)
 
                 print("Loading orderbook file...")
                 orderbook_file = next((n for n in archive.namelist() if '_orderbook_' in n), None)
                 if orderbook_file is None:
                     raise ValueError("Zip archive does not contain an orderbook file")
                 with archive.open(orderbook_file) as file:
-                    orderbook = pd.read_csv(file, names=ob_cols) / 10000.0
+                    # Read as text to avoid pandas buffer issues
+                    content = file.read().decode('utf-8')
+                    from io import StringIO
+                    orderbook = pd.read_csv(StringIO(content), names=ob_cols, dtype=float) / 10000.0
         else:
             messages = pd.read_csv(self.message_path, names=msg_cols)
             orderbook = pd.read_csv(self.orderbook_path, names=ob_cols) / 10000.0
