@@ -2,7 +2,27 @@ import core.AlmgrenChrissModel as ac
 import core.MarketEnvironment as me
 import numpy as np
 import pandas as pd
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os
 
+def _run_lambda_worker(args):
+    simulator_params, lambd, n_sims, seed = args
+
+    sim = MonteCarloSimulator(**simulator_params)
+
+    res = sim.run_single_lambda(
+        lambd=lambd,
+        n_sims=n_sims,
+        seed=seed
+    )
+
+    return {
+        "lambda": lambd,
+        "mean_is": res["mean_is"],
+        "var_is": res["var_is"],
+        "std_is": res["std_is"],
+        "kappa": res["kappa"]
+    }
 class MonteCarloSimulator:
     def __init__(self, S0, X, T, N, sigma, eta, gamma):
         self.S0 = S0
@@ -70,26 +90,41 @@ class MonteCarloSimulator:
 
         return result
 
-    def run_lambda_grid(self, lambda_values, n_sims=1000, seed=None): #likelhy same here
+    def run_lambda_grid(self, lambda_values, n_sims=1000, seed=None, parallel=True, max_workers=None):
         """
         Run Monte Carlo across many lambda values.
         Returns DataFrame with mean and variance of IS for each lambda.
         """
-        results = []
+
+        simulator_params = {
+            "S0": self.S0,
+            "X": self.X,
+            "T": self.T,
+            "N": self.N,
+            "sigma": self.sigma,
+            "eta": self.eta,
+            "gamma": self.gamma
+        }
+
+        tasks = []
 
         for j, lambd in enumerate(lambda_values):
-            res = self.run_single_lambda(
-                lambd=lambd,
-                n_sims=n_sims,
-                seed=None if seed is None else seed + j
-            )
+            lambda_seed = None if seed is None else seed + j
+            tasks.append((simulator_params, float(lambd), n_sims, lambda_seed))
 
-            results.append({
-                "lambda": lambd,
-                "mean_is": res["mean_is"],
-                "var_is": res["var_is"],
-                "std_is": res["std_is"],
-                "kappa": res["kappa"]
-            })
+        if not parallel:
+            results = [_run_lambda_worker(task) for task in tasks]
+            return pd.DataFrame(results).sort_values("lambda").reset_index(drop=True)
 
-        return pd.DataFrame(results)
+        if max_workers is None:
+            max_workers = max(1, os.cpu_count() - 1)
+
+        results = []
+
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_run_lambda_worker, task) for task in tasks]
+
+            for future in as_completed(futures):
+                results.append(future.result())
+
+        return pd.DataFrame(results).sort_values("lambda").reset_index(drop=True)

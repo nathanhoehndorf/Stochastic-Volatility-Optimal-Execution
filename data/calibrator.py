@@ -55,51 +55,162 @@ class LobsterCalibrator:
 
         ob_cols = []
         for i in range(1, self.levels + 1):
-            ob_cols.extend([f"Ask_Price_{i}", f"Ask_Size_{i}", f"Bid_Price_{i}", f"Bid_Size_{i}"])
+            ob_cols.extend([
+                f"Ask_Price_{i}", f"Ask_Size_{i}",
+                f"Bid_Price_{i}", f"Bid_Size_{i}"
+            ])
 
-        print("Loading message file...")
-        if self.message_path.lower().endswith('.zip'):
-            with zipfile.ZipFile(self.message_path, 'r') as archive:
-                message_file = next((n for n in archive.namelist() if '_message_' in n), None)
+        if self.message_path.lower().endswith(".zip"):
+            with zipfile.ZipFile(self.message_path, "r") as archive:
+                names = archive.namelist()
+
+                message_file = next((n for n in names if "_message_" in n), None)
+                orderbook_file = next((n for n in names if "_orderbook_" in n), None)
+
                 if message_file is None:
                     raise ValueError("Zip archive does not contain a message file")
-                with archive.open(message_file) as file:
-                    # Read as text to avoid pandas buffer issues
-                    content = file.read().decode('utf-8')
-                    from io import StringIO
-                    messages = pd.read_csv(StringIO(content), names=msg_cols)
-
-                print("Loading orderbook file...")
-                orderbook_file = next((n for n in archive.namelist() if '_orderbook_' in n), None)
                 if orderbook_file is None:
                     raise ValueError("Zip archive does not contain an orderbook file")
+
+                print("Loading message file...")
+                with archive.open(message_file) as file:
+                    messages = pd.read_csv(
+                        file,
+                        names=msg_cols,
+                        dtype={
+                            "Time": "float64",
+                            "Event": "int16",
+                            "OrderID": "int64",
+                            "Size": "int32",
+                            "Price": "int64",
+                            "Direction": "int8",
+                        }
+                    )
+
+                print("Loading orderbook file...")
                 with archive.open(orderbook_file) as file:
-                    # Read as text to avoid pandas buffer issues
-                    content = file.read().decode('utf-8')
-                    from io import StringIO
-                    orderbook = pd.read_csv(StringIO(content), names=ob_cols, dtype=float) / 10000.0
+                    orderbook = pd.read_csv(
+                        file,
+                        names=ob_cols,
+                        dtype="float64"
+                    )
+
+                # Only price columns should be divided by 10000.
+                price_cols = [c for c in orderbook.columns if "Price" in c]
+                orderbook[price_cols] = orderbook[price_cols] / 10000.0
+
         else:
-            messages = pd.read_csv(self.message_path, names=msg_cols)
-            orderbook = pd.read_csv(self.orderbook_path, names=ob_cols) / 10000.0
+            messages = pd.read_csv(
+                self.message_path,
+                names=msg_cols,
+                dtype={
+                    "Time": "float64",
+                    "Event": "int16",
+                    "OrderID": "int64",
+                    "Size": "int32",
+                    "Price": "int64",
+                    "Direction": "int8",
+                }
+            )
+
+            orderbook = pd.read_csv(
+                self.orderbook_path,
+                names=ob_cols,
+                dtype="float64"
+            )
+
+            price_cols = [c for c in orderbook.columns if "Price" in c]
+            orderbook[price_cols] = orderbook[price_cols] / 10000.0
 
         df = pd.concat([messages, orderbook], axis=1)
 
-        df['Mid_Price'] = (df['Ask_Price_1'] + df['Bid_Price_1']) / 2.0
-        df['Micro_Price'] = (df['Bid_Size_1']*df['Ask_Price_1']+df['Ask_Size_1']*df['Bid_Price_1']) / (df['Bid_Size_1'] + df['Ask_Size_1'])
+        df["Mid_Price"] = (df["Ask_Price_1"] + df["Bid_Price_1"]) / 2.0
+        df["Micro_Price"] = (
+            df["Bid_Size_1"] * df["Ask_Price_1"]
+            + df["Ask_Size_1"] * df["Bid_Price_1"]
+        ) / (df["Bid_Size_1"] + df["Ask_Size_1"])
 
         return df
     
-    def estimate_volatility(self, df: pd.DataFrame, freq: str = '5min') -> float:
+    def _estimate_temporary_impact(self, df: pd.DataFrame, market_orders: pd.DataFrame):
+        """
+        Estimate temporary impact by walking the ask book for different trade sizes.
+        """
+
+        total_ask_depth = np.zeros(len(df))
+
+        for level in range(1, self.levels + 1):
+            size_col = f"Ask_Size_{level}"
+            if size_col in df.columns:
+                total_ask_depth += df[size_col].to_numpy()
+
+        total_ask_depth = total_ask_depth[np.isfinite(total_ask_depth)]
+        total_ask_depth = total_ask_depth[total_ask_depth > 0]
+
+        if len(total_ask_depth) < 10:
+            print("Warning: Insufficient ask depth for temporary impact estimation")
+            return None
+
+        min_size = max(1.0, np.percentile(total_ask_depth, 10))
+        max_size = max(min_size + 1.0, np.percentile(total_ask_depth, 80))
+
+        trade_sizes = np.linspace(min_size, max_size, 20)
+
+        impacts = []
+
+        sample_size = min(len(df), 1000)
+        sampled_indices = np.random.choice(df.index.to_numpy(), size=sample_size, replace=False)
+
+        for X in trade_sizes:
+            trial_impacts = []
+
+            for idx in sampled_indices:
+                row = df.loc[idx]
+
+                avg_execution_price = self._walk_ask_book_price(row, X)
+
+                if avg_execution_price is None:
+                    continue
+
+                impact = avg_execution_price - row["Mid_Price"]
+
+                if np.isfinite(impact) and impact > 0:
+                    trial_impacts.append(impact)
+
+            if len(trial_impacts) > 0:
+                impacts.append((X, np.mean(trial_impacts)))
+
+        if len(impacts) < 5:
+            print("Warning: Insufficient data for temporary impact estimation")
+            return None
+
+        X_vals, impact_vals = zip(*impacts)
+
+        X_log = np.log(np.asarray(X_vals))
+        impact_log = np.log(np.asarray(impact_vals))
+
+        slope, intercept = np.polyfit(X_log, impact_log, 1)
+
+        eta = np.exp(intercept)
+
+        return float(eta)
+    
+    def estimate_volatility(self, df: pd.DataFrame, freq: str = "5min") -> float:
         """Calculate annualized volatility from mid-price log returns."""
-        df['Time_Delta'] = pd.to_timedelta(df['Time'], unit='s')
-        df.set_index('Time_Delta', inplace=True)
 
-        resampled = df['Mid_Price'].resample(freq).last().dropna()
-        log_returns = np.log(resampled/resampled.shift(1)).diff().dropna()
+        temp = df[["Time", "Mid_Price"]].copy()
+        temp["Time_Delta"] = pd.to_timedelta(temp["Time"], unit="s")
+        temp = temp.set_index("Time_Delta")
 
-        # 252 trading days, 78 5-minute intervals per day
-        annualized_vol = log_returns.std() * np.sqrt(252*(390 / int(freq.replace('min',''))))
-        return annualized_vol
+        resampled = temp["Mid_Price"].resample(freq).last().dropna()
+
+        log_returns = np.log(resampled / resampled.shift(1)).dropna()
+
+        annualized_vol = log_returns.std() * np.sqrt(
+            252 * (390 / int(freq.replace("min", "")))
+        )
+
+        return float(annualized_vol)
     
     def estimate_impact_parameters(self, df: pd.DataFrame):
         """
@@ -123,106 +234,106 @@ class LobsterCalibrator:
         
         return {'eta': eta, 'gamma': gamma}
     
-    def _estimate_temporary_impact(self, df: pd.DataFrame, market_orders: pd.DataFrame):
-        """Estimate temporary impact parameter eta by simulating trade execution."""
-        trade_sizes = np.logspace(2, 6, 20)  # Trade sizes from 100 to 1M shares
-        impacts = []
-        
-        for X in trade_sizes:
-            # Simulate execution for trade size X
-            impact = self._simulate_trade_execution(df, X)
-            if impact is not None:
-                impacts.append((X, impact))
-        
-        if len(impacts) < 5:
-            print("Warning: Insufficient data for temporary impact estimation")
-            return None
-            
-        # Regress log(impact) against log(X) to get eta
-        X_vals, impact_vals = zip(*impacts)
-        X_log = np.log(X_vals)
-        impact_log = np.log(impact_vals)
-        
-        # Linear regression: log(impact) = log(eta) + eta * log(X)
-        # Actually: impact = eta * sqrt(X), so log(impact) = log(eta) + 0.5 * log(X)
-        slope, intercept = np.polyfit(X_log, impact_log, 1)
-        
-        # eta should be around slope/2 if impact ~ sqrt(X), but we'll use the slope directly
-        eta = np.exp(intercept)  # eta = exp(intercept) where intercept = log(eta)
-        
-        return eta
     
+    def _walk_ask_book_price(self, row, trade_size: float):
+        """
+        Computes average execution price for a market buy order
+        by walking through ask levels.
+        """
+
+        remaining = trade_size
+        total_cash = 0.0
+        total_filled = 0.0
+
+        for level in range(1, self.levels + 1):
+            price_col = f"Ask_Price_{level}"
+            size_col = f"Ask_Size_{level}"
+
+            if price_col not in row or size_col not in row:
+                break
+
+            price = row[price_col]
+            size = row[size_col]
+
+            if pd.isna(price) or pd.isna(size) or size <= 0:
+                continue
+
+            fill = min(remaining, size)
+
+            total_cash += fill * price
+            total_filled += fill
+            remaining -= fill
+
+            if remaining <= 0:
+                break
+
+        if total_filled <= 0 or remaining > 0:
+            return None
+
+        return total_cash / total_filled
+
+
     def _simulate_trade_execution(self, df: pd.DataFrame, trade_size: float):
         """Simulate execution of a trade of size X and return price impact."""
-        # Find a random starting point with sufficient liquidity
-        valid_starts = []
-        for idx in range(len(df)):
-            bid_size = df.iloc[idx]['Bid_Size_1']
-            ask_size = df.iloc[idx]['Ask_Size_1']
-            if bid_size > trade_size * 0.1 and ask_size > trade_size * 0.1:  # At least 10% of trade size
-                valid_starts.append(idx)
-        
-        if len(valid_starts) == 0:
+
+        valid_mask = (
+            (df["Bid_Size_1"].to_numpy() > trade_size * 0.1)
+            & (df["Ask_Size_1"].to_numpy() > trade_size * 0.1)
+        )
+
+        valid_indices = np.flatnonzero(valid_mask)
+
+        if len(valid_indices) == 0:
             return None
-            
-        start_idx = np.random.choice(valid_starts)
-        start_price = df.iloc[start_idx]['Mid_Price']
-        
-        # Simulate market buy order (simplified - just use best ask)
-        # In reality, would need to walk the order book
-        execution_price = df.iloc[start_idx]['Ask_Price_1']
-        
-        # Price impact = execution price - mid price
+
+        start_idx = np.random.choice(valid_indices)
+
+        start_price = df["Mid_Price"].to_numpy()[start_idx]
+        execution_price = df["Ask_Price_1"].to_numpy()[start_idx]
+
         impact = execution_price - start_price
-        
-        return max(impact, 0)  # Only positive impacts
+
+        return max(float(impact), 0.0)
     
     def _estimate_permanent_impact(self, df: pd.DataFrame, market_orders: pd.DataFrame):
         """Estimate permanent impact parameter gamma using order flow imbalance."""
-        # Create time delta column if it doesn't exist
-        if 'Time_Delta' not in df.columns:
-            df = df.copy()
-            df['Time_Delta'] = pd.to_timedelta(df['Time'], unit='s')
-        
-        # Resample to 5-minute intervals
-        df_resampled = df.set_index('Time_Delta').resample('5min').agg({
-            'Mid_Price': 'last',
-            'Size': 'sum',
-            'Direction': lambda x: (x == 1).sum() - (x == -1).sum()  # Net buy orders
+
+        temp = df[["Time", "Mid_Price", "Size", "Direction"]].copy()
+        temp["Time_Delta"] = pd.to_timedelta(temp["Time"], unit="s")
+        temp["Signed_Count"] = np.where(
+            temp["Direction"] == 1,
+            1,
+            np.where(temp["Direction"] == -1, -1, 0)
+        )
+        temp["Signed_Size"] = temp["Signed_Count"] * temp["Size"]
+
+        temp = temp.set_index("Time_Delta")
+
+        df_resampled = temp.resample("5min").agg({
+            "Mid_Price": "last",
+            "Size": "sum",
+            "Signed_Size": "sum"
         }).dropna()
-        
+
         if len(df_resampled) < 10:
             print("Warning: Insufficient data for permanent impact estimation")
             return None
-        
-        # Calculate mid-price returns
-        df_resampled['Mid_Return'] = df_resampled['Mid_Price'].pct_change()
-        
-        # Order flow imbalance (simplified)
-        df_resampled['Order_Flow'] = df_resampled['Direction'] * df_resampled['Size']
-        
-        # Regress mid-price returns against lagged order flow
+
+        df_resampled["Mid_Return"] = df_resampled["Mid_Price"].pct_change()
+        df_resampled["Lagged_Order_Flow"] = df_resampled["Signed_Size"].shift(1)
+
         valid_data = df_resampled.dropna()
-        if len(valid_data) < 5:
+
+        if len(valid_data) < 3:
             return None
-            
-        # Use lagged order flow to predict returns
-        lagged_flow = valid_data['Order_Flow'].shift(1).dropna()
-        returns = valid_data['Mid_Return'].iloc[1:]
-        
-        if len(lagged_flow) != len(returns):
-            min_len = min(len(lagged_flow), len(returns))
-            lagged_flow = lagged_flow.iloc[:min_len]
-            returns = returns.iloc[:min_len]
-        
-        if len(lagged_flow) < 3:
-            return None
-            
-        slope, intercept = np.polyfit(lagged_flow, returns, 1)
-        
-        gamma = abs(slope)  # Permanent impact coefficient
-        
-        return gamma
+
+        slope, intercept = np.polyfit(
+            valid_data["Lagged_Order_Flow"].to_numpy(),
+            valid_data["Mid_Return"].to_numpy(),
+            1
+        )
+
+        return abs(float(slope))
     
     def estimate_heston_parameters(self, df: pd.DataFrame):
         """

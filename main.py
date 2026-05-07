@@ -8,6 +8,52 @@ from evaluation.comparator import ModelComparator
 from evaluation.statistics import print_results
 import numpy as np
 import matplotlib.pyplot as plt
+import zipfile
+
+def get_data_dir():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "data"))
+
+def unzip_datasets_once():
+    data_dir = get_data_dir()
+    marker_path = os.path.join(data_dir, ".unzipped_once")
+
+    if not os.path.isdir(data_dir):
+        print(f"No data directory found at: {data_dir}")
+        return
+
+    if os.path.exists(marker_path):
+        return
+
+    zip_files = [
+        f for f in os.listdir(data_dir)
+        if f.lower().endswith(".zip")
+    ]
+
+    if not zip_files:
+        print(f"No zip files found in: {data_dir}")
+        with open(marker_path, "w") as marker:
+            marker.write("No zip files were present on first run.\n")
+        return
+
+    print("\nUnzipping dataset archives for first-time setup...")
+
+    for zip_name in zip_files:
+        zip_path = os.path.join(data_dir, zip_name)
+        extract_dir = os.path.join(data_dir, os.path.splitext(zip_name)[0])
+
+        os.makedirs(extract_dir, exist_ok=True)
+
+        print(f"  Extracting {zip_name} -> {extract_dir}")
+
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(extract_dir)
+
+    with open(marker_path, "w") as marker:
+        marker.write("Zip files were extracted successfully.\n")
+
+    print("Finished unzipping dataset archives.\n")
+
+
 
 def plot_lambda_results(results):
     plt.figure()
@@ -51,29 +97,38 @@ def get_int(prompt, default):
 
 
 def list_zip_datasets():
-    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "data", "_files"))
+    data_dir = get_data_dir()
+
     if not os.path.isdir(data_dir):
         return []
-    return sorted([f for f in os.listdir(data_dir) if f.lower().endswith('.zip')])
+
+    return sorted([
+        f for f in os.listdir(data_dir)
+        if f.lower().endswith(".zip")
+    ])
 
 
 def choose_dataset():
     datasets = list_zip_datasets()
+
     if not datasets:
-        print("No LOBSTER dataset archives found in data/_files.")
+        print("No LOBSTER dataset archives found in data.")
         return None
 
     print("\nChoose a LOBSTER dataset for parameter calibration:")
+
     for idx, name in enumerate(datasets, start=1):
         print(f"{idx}. {name}")
+
     print("0. Skip dataset calibration")
 
     choice = get_int("Select dataset", 1)
+
     if choice <= 0 or choice > len(datasets):
         print("Skipping dataset calibration.")
         return None
 
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "data", "_files", datasets[choice - 1]))
+    return os.path.abspath(os.path.join(get_data_dir(), datasets[choice - 1]))
 
 
 def estimate_parameters_from_dataset(dataset_path):
@@ -85,11 +140,14 @@ def estimate_parameters_from_dataset(dataset_path):
     impact_params = calibrator.estimate_impact_parameters(df)
     heston_params = calibrator.estimate_heston_parameters(df)
 
+    estimated_eta = impact_params.get("eta") if impact_params else None
+    estimated_gamma = impact_params.get("gamma") if impact_params else None
+
     defaults = {
         "S0": float(df["Mid_Price"].iloc[0]) if "Mid_Price" in df.columns else 375,
         "sigma": sigma if sigma is not None else 0.06,
-        "eta": impact_params.get("eta") if impact_params else 0.005,
-        "gamma": impact_params.get("gamma") if impact_params else 0.0000047,
+        "eta": estimated_eta if estimated_eta is not None else 0.005,
+        "gamma": estimated_gamma if estimated_gamma is not None else 0.0000047,
         "heston": heston_params if heston_params is not None else {
             "v0": 0.04,
             "mu": 0.0,
@@ -100,17 +158,27 @@ def estimate_parameters_from_dataset(dataset_path):
         }
     }
 
-    print("Estimated calibration defaults:")
-    print(f"  S0 = {defaults['S0']:.2f}")
-    print(f"  sigma = {defaults['sigma']:.6f}")
-    if defaults['eta'] is not None:
-        print(f"  eta = {defaults['eta']:.6f}")
+    print("\n========== ESTIMATED CALIBRATION DEFAULTS ==========")
+
+    print(f"  S0     = {defaults['S0']:.4f}")
+    print(f"  sigma  = {defaults['sigma']:.8f}")
+
+    if defaults["eta"] is not None:
+        print(f"  eta    = {defaults['eta']:.12e}")
     else:
-        print("  eta = (estimation failed, using default)")
-    if defaults['gamma'] is not None:
-        print(f"  gamma = {defaults['gamma']:.8f}")
+        print("  eta    = estimation failed, using fallback default")
+
+    if defaults["gamma"] is not None:
+        print(f"  gamma  = {defaults['gamma']:.12e}")
     else:
-        print("  gamma = (estimation failed, using default)")
+        print("  gamma  = estimation failed, using fallback default")
+
+    if "heston" in defaults and defaults["heston"] is not None:
+        print("\n  Heston parameters:")
+        for key, value in defaults["heston"].items():
+            print(f"    {key:<6} = {value:.12e}")
+
+    print("===================================================\n")
 
     return defaults
 
@@ -325,6 +393,8 @@ def run_model_comparison(params):
             plt.show()
 
 def main():
+    unzip_datasets_once()
+
     selected_dataset = choose_dataset()
     defaults = None
     if selected_dataset is not None:
@@ -363,7 +433,7 @@ def main():
             break
 
         else:
-            print("Invalid choice. Please choose 1-5.")
+            print("Invalid choice. Please choose 1-6.")
 
 
 if __name__ == "__main__":
