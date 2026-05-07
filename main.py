@@ -406,7 +406,7 @@ def main():
         print("\n========== MAIN MENU ==========")
         print("1. Run single backtest")
         print("2. Run Monte Carlo for one lambda")
-        print("3. Optimize lambda with grid search")
+        print("3. Optimize lambda with grid search (find most optimal lambda between specified range)")
         print("4. Change base parameters")
         print("5. Run model comparison suite")
         print("6. Quit")
