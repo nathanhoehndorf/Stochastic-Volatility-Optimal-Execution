@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import zipfile
 
 def get_data_dir():
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "data/_files"))
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "data/"))
 
 def unzip_datasets_once():
     data_dir = get_data_dir()
@@ -222,8 +222,8 @@ def get_base_parameters(defaults=None):
     params = {
         "S0": get_float("Initial stock price S0", defaults.get("S0", 100)),
         "X": get_float("Shares to execute X", defaults.get("X", 1_000_000)),
-        "T": get_float("Trading horizon T", defaults.get("T", 390)),
         "N": get_int("Number of intervals N", defaults.get("N", 78)),
+        "T": get_float("Trading horizon T", defaults.get("T", 1/(252))),
         "sigma": get_float("Volatility sigma", defaults.get("sigma", 0.1)),
         "eta": get_float("Temporary impact eta", defaults.get("eta", 0.0000025)),
         "gamma": get_float("Permanent impact gamma", defaults.get("gamma", 0.0000005)),
