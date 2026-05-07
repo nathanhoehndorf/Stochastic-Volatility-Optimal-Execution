@@ -6,12 +6,13 @@ import core.AlmgrenChrissModel as ac
 from data.calibrator import LobsterCalibrator
 from evaluation.comparator import ModelComparator
 from evaluation.statistics import print_results
+from scipy.stats import ttest_rel
 import numpy as np
 import matplotlib.pyplot as plt
 import zipfile
 
 def get_data_dir():
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "data"))
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "data/_files"))
 
 def unzip_datasets_once():
     data_dir = get_data_dir()
@@ -40,6 +41,10 @@ def unzip_datasets_once():
     for zip_name in zip_files:
         zip_path = os.path.join(data_dir, zip_name)
         extract_dir = os.path.join(data_dir, os.path.splitext(zip_name)[0])
+
+        if os.path.isdir(extract_dir) and os.listdir(extract_dir):
+            print(f"  Skipping {zip_name}: extracted folder already exists at {extract_dir}")
+            continue
 
         os.makedirs(extract_dir, exist_ok=True)
 
@@ -92,33 +97,54 @@ def get_float(prompt, default):
 def get_int(prompt, default):
     user_input = input(f"{prompt} [{default}]: ").strip()
     if user_input == "":
-        return default
+        return default  
     return int(user_input)
 
 
-def list_zip_datasets():
+def list_datasets():
     data_dir = get_data_dir()
 
     if not os.path.isdir(data_dir):
         return []
 
-    return sorted([
-        f for f in os.listdir(data_dir)
-        if f.lower().endswith(".zip")
-    ])
+    entries = sorted(os.listdir(data_dir))
+    datasets = []
+    seen_bases = set()
+
+    # Prefer extracted directories over zip archives with the same base name
+    for name in entries:
+        path = os.path.join(data_dir, name)
+        base_name, ext = os.path.splitext(name)
+
+        if os.path.isdir(path):
+            datasets.append(os.path.abspath(path))
+            seen_bases.add(name)
+            seen_bases.add(base_name)
+
+    for name in entries:
+        path = os.path.join(data_dir, name)
+        base_name, ext = os.path.splitext(name)
+
+        if ext.lower() == '.zip' and base_name not in seen_bases:
+            datasets.append(os.path.abspath(path))
+
+    return datasets
 
 
 def choose_dataset():
-    datasets = list_zip_datasets()
+    datasets = list_datasets()
 
     if not datasets:
-        print("No LOBSTER dataset archives found in data.")
+        print("No LOBSTER dataset archives or directories found in data.")
         return None
 
     print("\nChoose a LOBSTER dataset for parameter calibration:")
 
-    for idx, name in enumerate(datasets, start=1):
-        print(f"{idx}. {name}")
+    for idx, path in enumerate(datasets, start=1):
+        label = os.path.basename(path)
+        if os.path.isdir(path):
+            label += "/"
+        print(f"{idx}. {label}")
 
     print("0. Skip dataset calibration")
 
@@ -128,23 +154,29 @@ def choose_dataset():
         print("Skipping dataset calibration.")
         return None
 
-    return os.path.abspath(os.path.join(get_data_dir(), datasets[choice - 1]))
+    return datasets[choice - 1]
 
 
 def estimate_parameters_from_dataset(dataset_path):
     print(f"\nEstimating parameters from dataset: {os.path.basename(dataset_path)}")
-    calibrator = LobsterCalibrator.from_zip(dataset_path)
+    calibrator = LobsterCalibrator.from_dataset(dataset_path)
     df = calibrator.load_data()
 
     sigma = calibrator.estimate_volatility(df)
     impact_params = calibrator.estimate_impact_parameters(df)
     heston_params = calibrator.estimate_heston_parameters(df)
 
+    if heston_params is not None:
+        heston_params['xi'] = min(heston_params['xi'], 0.8)
+        heston_params['omega'] = max(heston_params['omega'], 0.1)
+        heston_params['v0'] = max(heston_params['v0'], 0.0001)
+        heston_params['theta'] = max(heston_params['theta'], 0.0001)
+
     estimated_eta = impact_params.get("eta") if impact_params else None
     estimated_gamma = impact_params.get("gamma") if impact_params else None
 
     defaults = {
-        "S0": float(df["Mid_Price"].iloc[0]) if "Mid_Price" in df.columns else 375,
+        "S0": float(df["Mid_Price"].iloc[0]) if "Mid_Price" in df.columns else 100,
         "sigma": sigma if sigma is not None else 0.06,
         "eta": estimated_eta if estimated_eta is not None else 0.005,
         "gamma": estimated_gamma if estimated_gamma is not None else 0.0000047,
@@ -188,13 +220,13 @@ def get_base_parameters(defaults=None):
     print("\nEnter simulation parameters. Press Enter to use defaults.\n")
 
     params = {
-        "S0": get_float("Initial stock price S0", defaults.get("S0", 375)),
-        "X": get_float("Shares to execute X", defaults.get("X", 30)),
-        "T": get_float("Trading horizon T", defaults.get("T", 10)),
-        "N": get_int("Number of intervals N", defaults.get("N", 40)),
-        "sigma": get_float("Volatility sigma", defaults.get("sigma", 0.06)),
-        "eta": get_float("Temporary impact eta", defaults.get("eta", 0.005)),
-        "gamma": get_float("Permanent impact gamma", defaults.get("gamma", 0.0000047)),
+        "S0": get_float("Initial stock price S0", defaults.get("S0", 100)),
+        "X": get_float("Shares to execute X", defaults.get("X", 1_000_000)),
+        "T": get_float("Trading horizon T", defaults.get("T", 390)),
+        "N": get_int("Number of intervals N", defaults.get("N", 78)),
+        "sigma": get_float("Volatility sigma", defaults.get("sigma", 0.1)),
+        "eta": get_float("Temporary impact eta", defaults.get("eta", 0.0000025)),
+        "gamma": get_float("Permanent impact gamma", defaults.get("gamma", 0.0000005)),
         "heston": defaults.get("heston", {
             "v0": 0.04,
             "mu": 0.0,
@@ -206,6 +238,13 @@ def get_base_parameters(defaults=None):
     }
 
     return params
+
+
+def calculate_sharpe_like(mean_is: float, std_is: float) -> float:
+    """Compute a Sharpe-like reliability ratio from mean IS and its standard deviation."""
+    if std_is <= 0:
+        return float('inf') if mean_is < 0 else float('-inf') if mean_is > 0 else 0.0
+    return float(-mean_is / std_is)
 
 
 def build_objects(params, lambd):
@@ -392,6 +431,143 @@ def run_model_comparison(params):
                 fig.show()
             plt.show()
 
+
+def run_dataset_sweep(params):
+    datasets = list_datasets()
+    if not datasets:
+        print("No dataset archives or directories found to sweep.")
+        return
+
+    print("\n========== LOBSTER DATASET SWEEP ==========")
+    print("This sweep will calibrate each available dataset, run paired AC vs Heston simulations, and compare results across all samples.")
+
+    lambd = get_float("Lambda for AC strategy", 0.5)
+    n_sims = get_int("Number of simulations per dataset", 500)
+    seed = int(get_float("Random seed", 42))
+
+    sweep_records = []
+    skipped = []
+
+    for dataset_path in datasets:
+        label = os.path.basename(dataset_path)
+        if os.path.isdir(dataset_path):
+            label += "/"
+
+        print(f"\n--- Dataset: {label} ---")
+        try:
+            calibrator = LobsterCalibrator.from_dataset(dataset_path)
+            df = calibrator.load_data()
+        except Exception as exc:
+            print(f"Skipping dataset due to loading error: {exc}")
+            skipped.append(label)
+            continue
+
+        sigma = calibrator.estimate_volatility(df)
+        impact_params = calibrator.estimate_impact_parameters(df)
+        heston_params = calibrator.estimate_heston_parameters(df)
+
+        if heston_params is None:
+            print("  Skipping dataset because Heston parameter estimation failed.")
+            skipped.append(label)
+            continue
+
+        dataset_params = params.copy()
+        dataset_params["S0"] = float(df["Mid_Price"].iloc[0]) if "Mid_Price" in df.columns else params["S0"]
+        dataset_params["sigma"] = sigma if sigma is not None else params["sigma"]
+        dataset_params["eta"] = impact_params.get("eta") if impact_params else params["eta"]
+        dataset_params["gamma"] = impact_params.get("gamma") if impact_params else params["gamma"]
+        dataset_params["heston"] = heston_params
+
+        if dataset_params["eta"] is None:
+            print("  Warning: temporary impact estimation failed, using user default eta.")
+            dataset_params["eta"] = params["eta"]
+        if dataset_params["gamma"] is None:
+            print("  Warning: permanent impact estimation failed, using user default gamma.")
+            dataset_params["gamma"] = params["gamma"]
+
+        strategy, env, _, _ = build_objects(dataset_params, lambd)
+        heston_model = HestonParameters(
+            v0=heston_params["v0"],
+            mu=heston_params["mu"],
+            theta=heston_params["theta"],
+            omega=heston_params["omega"],
+            xi=heston_params["xi"],
+            rho=heston_params["rho"],
+        )
+
+        comp = ModelComparator(
+            model_ac=strategy,
+            model_hest=heston_model,
+            market_env=env,
+            num_sims=n_sims,
+            seed=seed,
+        )
+
+        try:
+            results = comp.run_comparison()
+        except Exception as exc:
+            print(f"  Skipping dataset due to simulation error: {exc}")
+            skipped.append(label)
+            continue
+
+        mean_ac = float(np.mean(results["is_ac"]))
+        std_ac = float(np.std(results["is_ac"], ddof=1))
+        mean_hest = float(np.mean(results["is_heston"]))
+        std_hest = float(np.std(results["is_heston"], ddof=1))
+
+        sweep_records.append({
+            "dataset": label,
+            "mean_ac": mean_ac,
+            "std_ac": std_ac,
+            "mean_hest": mean_hest,
+            "std_hest": std_hest,
+            "mean_diff": mean_ac - mean_hest,
+            "sharpe_ac": calculate_sharpe_like(mean_ac, std_ac),
+            "sharpe_hest": calculate_sharpe_like(mean_hest, std_hest),
+            "rho": heston_params.get("rho"),
+        })
+
+    if not sweep_records:
+        print("No datasets produced valid sweep results.")
+        return
+
+    mean_ac_arr = np.array([r["mean_ac"] for r in sweep_records])
+    mean_hest_arr = np.array([r["mean_hest"] for r in sweep_records])
+    sharpe_ac_arr = np.array([r["sharpe_ac"] for r in sweep_records])
+    sharpe_hest_arr = np.array([r["sharpe_hest"] for r in sweep_records])
+    diff_arr = mean_ac_arr - mean_hest_arr
+
+    t_stat, p_two = ttest_rel(mean_ac_arr, mean_hest_arr)
+    p_ttest = p_two / 2 if t_stat > 0 else 1.0 - p_two / 2
+
+    t_s, p_two_s = ttest_rel(sharpe_ac_arr, sharpe_hest_arr)
+    p_ttest_sharpe = p_two_s / 2 if t_s > 0 else 1.0 - p_two_s / 2
+
+    print("\n========== SWEEP SUMMARY AC VS HESTON ==========")
+    print(f"Datasets evaluated  : {len(sweep_records)}")
+    if skipped:
+        print(f"Datasets skipped    : {len(skipped)} -> {', '.join(skipped)}")
+
+    print("\nPer-dataset mean implementation shortfall and reliability:")
+    print(f"{'Dataset':<35} {'Mean_AC':>10} {'Mean_Hest':>10} {'Diff':>10} {'Sharpe_AC':>12} {'Sharpe_Hest':>12}")
+    for record in sweep_records:
+        print(f"{record['dataset']:<35} {record['mean_ac']:10.5f} {record['mean_hest']:10.5f} {record['mean_diff']:10.5f} {record['sharpe_ac']:12.5f} {record['sharpe_hest']:12.5f}")
+
+    print("\n--- Across-dataset paired t-test ---")
+    print(f"Mean difference (AC−Hest) across datasets: {diff_arr.mean():.5f}")
+    print(f"t-statistic: {t_stat:.4f}")
+    print(f"one-sided p-value: {p_ttest:.4f}")
+    print(f"Heston has lower mean IS across datasets: {p_ttest < 0.05}")
+
+    print("\n--- Sharpe-like reliability comparison ---")
+    print(f"Mean Sharpe_AC: {sharpe_ac_arr.mean():.5f}")
+    print(f"Mean Sharpe_Hest: {sharpe_hest_arr.mean():.5f}")
+    print(f"t-statistic (Sharpe): {t_s:.4f}")
+    print(f"one-sided p-value (Sharpe): {p_ttest_sharpe:.4f}")
+    print(f"Heston has higher reliability across datasets: {p_ttest_sharpe < 0.05}")
+
+    print("\nSweep complete. Use the model comparison suite for detailed analysis on a single parameter set.")
+
 def main():
     unzip_datasets_once()
 
@@ -409,7 +585,8 @@ def main():
         print("3. Optimize lambda with grid search (find most optimal lambda between specified range)")
         print("4. Change base parameters")
         print("5. Run model comparison suite")
-        print("6. Quit")
+        print("6. Run dataset sweep across all LOBSTER samples")
+        print("7. Quit")
 
         choice = input("Choose an option: ").strip()
 
@@ -429,11 +606,14 @@ def main():
             run_model_comparison(params)
 
         elif choice == "6":
+            run_dataset_sweep(params)
+
+        elif choice == "7":
             print("Goodbye.")
             break
 
         else:
-            print("Invalid choice. Please choose 1-6.")
+            print("Invalid choice. Please choose 1-7.")
 
 
 if __name__ == "__main__":

@@ -45,14 +45,21 @@ class ModelComparator:
         Evaluate the AC trading strategy on GBM price paths.
         Returns an IS array of length num_sims.
         """
-        is_samples = np.zeros(self.num_sims)
+        is_samples = np.full(self.num_sims, np.nan)
         for i in range(self.num_sims):
             path_seed = int(rng.integers(0, 1_000_000_000))
             price_path = self.market_env.simulate_unaffected_price_abm(seed=path_seed)
-            total_cash = self.market_env.apply_market_impact(price_path, trades)
-            is_samples[i] = self.market_env.implementation_shortfall(
-                self.model_ac.X, total_cash["total_cash"]
-            )
+            try:
+                total_cash = self.market_env.apply_market_impact(price_path, trades)
+                is_val = self.market_env.implementation_shortfall(
+                    self.model_ac.X, total_cash["total_cash"]
+                )
+                if not np.isfinite(is_val):
+                    raise ValueError("non-finite implementation shortfall")
+                is_samples[i] = is_val
+            except Exception as exc:
+                print(f"Warning: invalid AC path {i}: {exc}")
+                is_samples[i] = np.nan
         return is_samples
     
     def _run_heston_paths(self, trades, rng):
@@ -61,8 +68,8 @@ class ModelComparator:
         Returns an IS array of length num_sims, plus starting vol for each path.
         """
         h = self.model_hest
-        is_samples    = np.zeros(self.num_sims)
-        starting_vols = np.zeros(self.num_sims)
+        is_samples    = np.full(self.num_sims, np.nan)
+        starting_vols = np.full(self.num_sims, np.nan)
         for i in range(self.num_sims):
             path_seed = int(rng.integers(0, 1_000_000_000))
             price_path, variance_path = self.market_env.simulate_unaffected_price_heston(
@@ -74,12 +81,46 @@ class ModelComparator:
                 rho   = h.rho,
                 seed  = path_seed,
             )
-            total_cash = self.market_env.apply_market_impact(price_path, trades)
-            is_samples[i]    = self.market_env.implementation_shortfall(
-                self.model_ac.X, total_cash["total_cash"]
-            )
-            starting_vols[i] = np.sqrt(variance_path[0])   # convert variance → vol
+
+            # Discard numerically invalid or absurd paths before IS calculation
+            if not np.all(np.isfinite(price_path)):
+                print(f"Warning: invalid Heston price path {i} contains non-finite values")
+                is_samples[i] = np.nan
+                starting_vols[i] = np.nan
+                continue
+
+            if np.nanmax(price_path) > self.market_env.S0 * 2.0 or np.nanmin(price_path) < self.market_env.S0 * 0.2:
+                print(f"Warning: Heston price path {i} is implausible (extreme price move)")
+                is_samples[i] = np.nan
+                starting_vols[i] = np.nan
+                continue
+
+            try:
+                total_cash = self.market_env.apply_market_impact(price_path, trades)
+                is_val = self.market_env.implementation_shortfall(
+                    self.model_ac.X, total_cash["total_cash"]
+                )
+                if not np.isfinite(is_val):
+                    raise ValueError("non-finite implementation shortfall")
+                is_samples[i] = is_val
+            except Exception as exc:
+                print(f"Warning: invalid Heston path {i}: {exc}")
+                is_samples[i] = np.nan
+
+            starting_vols[i] = np.sqrt(max(variance_path[0], 0.0))   # convert variance → vol
         return is_samples, starting_vols
+
+    def _filter_valid_pairs(self, is_ac, is_hest, starting_vols):
+        mask = np.isfinite(is_ac) & np.isfinite(is_hest)
+        valid_count = int(mask.sum())
+        if valid_count == 0:
+            raise ValueError("No valid paired samples available after filtering invalid paths.")
+        if valid_count < len(is_ac):
+            print(f"Warning: filtered {len(is_ac) - valid_count} invalid paired samples.")
+        if starting_vols is not None:
+            start_vols = np.asarray(starting_vols, dtype=float)
+            return is_ac[mask], is_hest[mask], start_vols[mask]
+        return is_ac[mask], is_hest[mask], None
 
     def run_comparison(self, stat_kwargs=None):
         """
@@ -119,6 +160,8 @@ class ModelComparator:
  
         print(f"Running {self.num_sims} Heston paths ...")
         is_heston, starting_vols = self._run_heston_paths(trades, rng_hest)
+ 
+        is_ac, is_heston, starting_vols = self._filter_valid_pairs(is_ac, is_heston, starting_vols)
  
         # Allow caller to override starting_vols (e.g. collected externally)
         starting_vols = stat_kwargs.pop("starting_vols", starting_vols)

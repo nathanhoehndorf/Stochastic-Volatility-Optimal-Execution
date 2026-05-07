@@ -39,6 +39,42 @@ class LobsterCalibrator:
 
         return cls(message_path=archive_path, orderbook_path=archive_path, levels=levels)
 
+    @classmethod
+    def from_directory(cls, directory_path: str):
+        """Create a calibrator from a directory containing LOBSTER CSVs."""
+        if not os.path.isdir(directory_path):
+            raise ValueError(f"Directory path not found: {directory_path}")
+
+        entries = os.listdir(directory_path)
+        message_file = next((f for f in entries if '_message_' in f and f.lower().endswith('.csv')), None)
+        orderbook_file = next((f for f in entries if '_orderbook_' in f and f.lower().endswith('.csv')), None)
+
+        if message_file is None or orderbook_file is None:
+            raise ValueError("Directory does not contain expected LOBSTER message and orderbook CSV files")
+
+        orderbook_path = os.path.join(directory_path, orderbook_file)
+        message_path = os.path.join(directory_path, message_file)
+
+        import re
+        level_match = re.search(r'_(\d+)\.csv$', orderbook_file)
+        if level_match:
+            levels = int(level_match.group(1))
+        else:
+            with open(orderbook_path, 'r') as file:
+                first_line = file.readline().strip()
+            levels = max(1, len(first_line.split(',')) // 4)
+
+        return cls(message_path=message_path, orderbook_path=orderbook_path, levels=levels)
+
+    @classmethod
+    def from_dataset(cls, dataset_path: str):
+        """Create a calibrator from either a zip archive or a directory."""
+        if dataset_path.lower().endswith('.zip'):
+            return cls.from_zip(dataset_path)
+        if os.path.isdir(dataset_path):
+            return cls.from_directory(dataset_path)
+        raise ValueError("Dataset path must be a .zip archive or a directory containing LOBSTER files")
+
     def _open_csv(self, path: str, names):
         if path.lower().endswith('.zip'):
             with zipfile.ZipFile(path, 'r') as archive:
@@ -341,7 +377,7 @@ class LobsterCalibrator:
         
         Returns dict with parameters: v0, mu, theta, omega, xi, rho
         """
-        # Get volatility time series
+        # Get volatility time series in local time units (per minute if using 1min resampling)
         vol_series = self._estimate_volatility_series(df)
         
         if vol_series is None or len(vol_series) < 50:
@@ -351,27 +387,32 @@ class LobsterCalibrator:
         # Estimate parameters
         params = {}
         
-        # v0: current variance level
-        params['v0'] = vol_series.iloc[-1] ** 2
+        # v0: current instantaneous variance level
+        params['v0'] = float(vol_series.iloc[-1] ** 2)
         
         # mu: drift (set to 0 for risk-neutral)
         params['mu'] = 0.0
         
-        # theta: long-term variance (mean of variance series)
-        params['theta'] = vol_series.var()
+        # theta: long-run variance level in local time units
+        params['theta'] = float(np.nanmean(vol_series ** 2))
         
-        # omega (kappa): mean reversion speed
-        # xi: volatility of volatility  
-        # rho: correlation between price and volatility
+        # omega: mean reversion speed in local time units
         kappa, xi, rho = self._estimate_volatility_parameters(df, vol_series)
-        params['omega'] = kappa
-        params['xi'] = xi
-        params['rho'] = rho
-        
+        params['omega'] = float(kappa)
+        params['xi'] = float(xi)
+        params['rho'] = float(rho)
+
+        # Feller condition guard for the calibrated Heston parameters.
+        # If this fails, the variance process may hit zero too aggressively and
+        # the model can become numerically unstable even with truncation.
+        if 2.0 * params['omega'] * params['theta'] <= params['xi'] ** 2:
+            print("Warning: calibrated Heston parameters violate the Feller condition and will be rejected.")
+            return None
+
         return params
     
-    def _estimate_volatility_series(self, df: pd.DataFrame, window: str = '5min'):
-        """Estimate time-varying volatility series."""
+    def _estimate_volatility_series(self, df: pd.DataFrame, window: str = '1min'):
+        """Estimate time-varying volatility series in the local simulation time units."""
         try:
             df_copy = df.copy()
             if 'Time_Delta' not in df_copy.columns:
@@ -387,8 +428,8 @@ class LobsterCalibrator:
             if len(returns) < 10:
                 return None
             
-            # Rolling volatility (annualized)
-            vol_series = returns.rolling(window=20, min_periods=5).std() * np.sqrt(252 * (390 / 5))
+            # Rolling volatility in local units (per resample interval)
+            vol_series = returns.rolling(window=10, min_periods=2).std()
             
             return vol_series.dropna()
         except Exception as e:
@@ -398,15 +439,15 @@ class LobsterCalibrator:
     def _estimate_volatility_parameters(self, df: pd.DataFrame, vol_series):
         """Estimate kappa, xi, and rho for Heston model."""
         try:
-            # Mean reversion speed (kappa) - how quickly vol reverts to mean
-            # Estimate from autocorrelation of volatility
+            # Mean reversion speed (kappa) in local time units
             vol_autocorr = vol_series.autocorr(lag=1) if len(vol_series) > 1 else 0.5
-            kappa = max(0.01, -np.log(max(0.01, abs(vol_autocorr))) / 5)  # 5-minute intervals, minimum 0.01
+            kappa = max(0.0001, -np.log(max(0.01, abs(vol_autocorr))))
+            kappa = min(kappa, 10.0)
             
-            # Volatility of volatility (xi) - std of vol changes
+            # Volatility of volatility (xi) in local time units
             vol_changes = vol_series.diff().dropna()
             if len(vol_changes) > 0:
-                xi = max(0.01, vol_changes.std() * np.sqrt(252 * (390 / 5)))  # Annualized, minimum 0.01
+                xi = max(0.0001, vol_changes.std())
             else:
                 xi = 0.2  # Default value
             
@@ -419,7 +460,7 @@ class LobsterCalibrator:
                 df_copy.set_index('Time_Delta', inplace=True)
                 
                 returns = np.log(df_copy['Mid_Price'].resample('5min').last().dropna().pct_change().dropna())
-                vol_changes_5min = vol_series.resample('5min').last().diff().dropna()
+                vol_changes_5min = vol_series.resample('1min').last().diff().dropna()
                 
                 # Align the series
                 common_index = returns.index.intersection(vol_changes_5min.index)

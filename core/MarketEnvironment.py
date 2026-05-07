@@ -16,6 +16,9 @@ class MarketEnvironment:
         """
         Generate many Heston price paths and variance paths at once.
 
+        This uses a log-Euler discretization with full truncation of the
+        variance process, which is more stable when variance is near zero.
+
         Returns
         -------
         S : np.ndarray, shape (n_sims, N + 1)
@@ -51,6 +54,11 @@ class MarketEnvironment:
         for k in range(self.N):
             v_safe = np.maximum(v[:, k], 0.0)
 
+            S[:, k + 1] = S[:, k] * np.exp(
+                (mu - 0.5 * v_safe) * self.dt
+                + np.sqrt(v_safe * self.dt) * Z2[:, k]
+            )
+
             v[:, k + 1] = (
                 v[:, k]
                 + theta * (omega - v_safe) * self.dt
@@ -58,12 +66,6 @@ class MarketEnvironment:
             )
 
             v[:, k + 1] = np.maximum(v[:, k + 1], 0.0)
-
-            S[:, k + 1] = (
-                S[:, k]
-                + mu * S[:, k] * self.dt
-                + np.sqrt(v_safe * self.dt) * S[:, k] * Z2[:, k]
-            )
 
         return S, v
     def simulate_unaffected_price_heston(
@@ -130,12 +132,12 @@ class MarketEnvironment:
 
     Notes
     -----
-    - Uses Euler-Maruyama discretization:
-          v_{t+dt} = v_t + theta(omega - v_t)dt + xi sqrt(v_t dt) * Z1
-          S_{t+dt} = S_t + mu S_t dt + sqrt(v_t dt) S_t * Z2
+- Uses log-Euler with full truncation:
+          S_{t+dt} = S_t * exp((mu - 0.5 v_t) dt + sqrt(v_t dt) Z2)
+          v_{t+dt} = v_t + theta(omega - v_pos) dt + xi sqrt(v_pos dt) Z1
 
-    - Variance is truncated at zero to prevent numerical instability:
-          v_t = max(v_t, 0)
+    - Variance is truncated at zero only where it enters the diffusion or
+      drift multiplier, and the next step is floored to avoid negative values.
 
     - Z1 and Z2 are correlated standard normal variables constructed via:
           [Z1, Z2]^T = L * [z1, z2]^T
@@ -168,6 +170,11 @@ class MarketEnvironment:
 
             v_safe = max(v[k], 0.0)
 
+            S[k + 1] = S[k] * np.exp(
+                (mu - 0.5 * v_safe) * self.dt
+                + np.sqrt(v_safe * self.dt) * Z2
+            )
+
             v[k + 1] = (
                 v[k]
                 + theta * (omega - v_safe) * self.dt
@@ -175,12 +182,6 @@ class MarketEnvironment:
             )
 
             v[k + 1] = max(v[k + 1], 0.0)
-
-            S[k + 1] = (
-                S[k]
-                + mu * S[k] * self.dt
-                + np.sqrt(v_safe * self.dt) * S[k] * Z2
-            )
 
         return S, v
     def __init__(self, S0, sigma, T, N, gamma, eta):
@@ -340,4 +341,4 @@ class MarketEnvironment:
         float
             Implementation shortfall
         """
-        return X * self.S0 - int(total_cash)
+        return float(X * self.S0 - total_cash)
