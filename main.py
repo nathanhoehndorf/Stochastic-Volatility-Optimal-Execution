@@ -10,6 +10,119 @@ from scipy.stats import ttest_rel
 import numpy as np
 import matplotlib.pyplot as plt
 import zipfile
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import traceback
+
+def run_one_dataset_sweep_task(args):
+    """
+    Worker function for one dataset.
+
+    This must be top-level so ProcessPoolExecutor can pickle it on Windows.
+    """
+    dataset_path, base_params, lambd, n_sims, seed, worker_index = args
+
+    label = os.path.basename(dataset_path)
+    if os.path.isdir(dataset_path):
+        label += "/"
+
+    try:
+        calibrator = LobsterCalibrator.from_dataset(dataset_path)
+        df = calibrator.load_data()
+
+        sigma = calibrator.estimate_volatility(df)
+        impact_params = calibrator.estimate_impact_parameters(df)
+        heston_params = calibrator.estimate_heston_parameters(df)
+
+        if heston_params is None:
+            return {
+                "ok": False,
+                "dataset": label,
+                "reason": "Heston parameter estimation failed.",
+            }
+
+        dataset_params = base_params.copy()
+        dataset_params["S0"] = (
+            float(df["Mid_Price"].iloc[0])
+            if "Mid_Price" in df.columns
+            else base_params["S0"]
+        )
+        dataset_params["sigma"] = sigma if sigma is not None else base_params["sigma"]
+        dataset_params["eta"] = (
+            impact_params.get("eta")
+            if impact_params and impact_params.get("eta") is not None
+            else base_params["eta"]
+        )
+        dataset_params["gamma"] = (
+            impact_params.get("gamma")
+            if impact_params and impact_params.get("gamma") is not None
+            else base_params["gamma"]
+        )
+        dataset_params["heston"] = heston_params
+
+        strategy, env, _, _ = build_objects(dataset_params, lambd)
+
+        heston_model = HestonParameters(
+            v0=heston_params["v0"],
+            mu=heston_params["mu"],
+            theta=heston_params["theta"],
+            omega=heston_params["omega"],
+            xi=heston_params["xi"],
+            rho=heston_params["rho"],
+        )
+
+        comp = ModelComparator(
+            model_ac=strategy,
+            model_hest=heston_model,
+            market_env=env,
+            num_sims=n_sims,
+            seed=seed + worker_index,
+        )
+
+        results = comp.run_comparison()
+
+        is_ac = np.asarray(results["is_ac"], dtype=float)
+        is_heston = np.asarray(results["is_heston"], dtype=float)
+
+        is_ac = is_ac[np.isfinite(is_ac)]
+        is_heston = is_heston[np.isfinite(is_heston)]
+
+        if len(is_ac) < 2 or len(is_heston) < 2:
+            return {
+                "ok": False,
+                "dataset": label,
+                "reason": "Too few valid simulation outputs.",
+            }
+
+        mean_ac = float(np.mean(is_ac))
+        std_ac = float(np.std(is_ac, ddof=1))
+        mean_hest = float(np.mean(is_heston))
+        std_hest = float(np.std(is_heston, ddof=1))
+
+        record = {
+            "dataset": label,
+            "mean_ac": mean_ac,
+            "std_ac": std_ac,
+            "mean_hest": mean_hest,
+            "std_hest": std_hest,
+            "mean_diff": mean_ac - mean_hest,
+            "sharpe_ac": calculate_sharpe_like(mean_ac, std_ac),
+            "sharpe_hest": calculate_sharpe_like(mean_hest, std_hest),
+            "rho": heston_params.get("rho"),
+        }
+
+        return {
+            "ok": True,
+            "dataset": label,
+            "record": record,
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "dataset": label,
+            "reason": str(exc),
+            "traceback": traceback.format_exc(),
+        }
 
 def get_data_dir():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "data/"))
@@ -439,109 +552,137 @@ def run_dataset_sweep(params):
         return
 
     print("\n========== LOBSTER DATASET SWEEP ==========")
-    print("This sweep will calibrate each available dataset, run paired AC vs Heston simulations, and compare results across all samples.")
+    print(
+        "This sweep will calibrate each available dataset, run paired AC vs Heston "
+        "simulations, and compare results across all samples."
+    )
 
     lambd = get_float("Lambda for AC strategy", 0.5)
     n_sims = get_int("Number of simulations per dataset", 500)
     seed = int(get_float("Random seed", 42))
 
+    default_workers = max(1, min(len(datasets), max(1, (os.cpu_count() or 2) - 1)))
+    max_workers = get_int("Parallel workers", default_workers)
+
+    max_workers = max(1, min(max_workers, len(datasets)))
+
+    print(f"\nRunning dataset sweep with {max_workers} parallel worker(s).")
+    print(f"Datasets found: {len(datasets)}")
+
     sweep_records = []
     skipped = []
 
-    for dataset_path in datasets:
-        label = os.path.basename(dataset_path)
-        if os.path.isdir(dataset_path):
-            label += "/"
+    tasks = [
+        (dataset_path, params, lambd, n_sims, seed, idx)
+        for idx, dataset_path in enumerate(datasets)
+    ]
 
-        print(f"\n--- Dataset: {label} ---")
-        try:
-            calibrator = LobsterCalibrator.from_dataset(dataset_path)
-            df = calibrator.load_data()
-        except Exception as exc:
-            print(f"Skipping dataset due to loading error: {exc}")
-            skipped.append(label)
-            continue
+    if max_workers == 1:
+        # Sequential fallback. Useful for debugging.
+        for task in tasks:
+            dataset_path = task[0]
+            label = os.path.basename(dataset_path)
+            if os.path.isdir(dataset_path):
+                label += "/"
 
-        sigma = calibrator.estimate_volatility(df)
-        impact_params = calibrator.estimate_impact_parameters(df)
-        heston_params = calibrator.estimate_heston_parameters(df)
+            print(f"\n--- Dataset: {label} ---")
 
-        if heston_params is None:
-            print("  Skipping dataset because Heston parameter estimation failed.")
-            skipped.append(label)
-            continue
+            result = run_one_dataset_sweep_task(task)
 
-        dataset_params = params.copy()
-        dataset_params["S0"] = float(df["Mid_Price"].iloc[0]) if "Mid_Price" in df.columns else params["S0"]
-        dataset_params["sigma"] = sigma if sigma is not None else params["sigma"]
-        dataset_params["eta"] = impact_params.get("eta") if impact_params else params["eta"]
-        dataset_params["gamma"] = impact_params.get("gamma") if impact_params else params["gamma"]
-        dataset_params["heston"] = heston_params
+            if result["ok"]:
+                print(f"  Finished dataset: {result['dataset']}")
+                sweep_records.append(result["record"])
+            else:
+                print(f"  Skipping dataset {result['dataset']}: {result['reason']}")
+                skipped.append(result["dataset"])
 
-        if dataset_params["eta"] is None:
-            print("  Warning: temporary impact estimation failed, using user default eta.")
-            dataset_params["eta"] = params["eta"]
-        if dataset_params["gamma"] is None:
-            print("  Warning: permanent impact estimation failed, using user default gamma.")
-            dataset_params["gamma"] = params["gamma"]
+    else:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_label = {}
 
-        strategy, env, _, _ = build_objects(dataset_params, lambd)
-        heston_model = HestonParameters(
-            v0=heston_params["v0"],
-            mu=heston_params["mu"],
-            theta=heston_params["theta"],
-            omega=heston_params["omega"],
-            xi=heston_params["xi"],
-            rho=heston_params["rho"],
-        )
+            for task in tasks:
+                dataset_path = task[0]
+                label = os.path.basename(dataset_path)
+                if os.path.isdir(dataset_path):
+                    label += "/"
 
-        comp = ModelComparator(
-            model_ac=strategy,
-            model_hest=heston_model,
-            market_env=env,
-            num_sims=n_sims,
-            seed=seed,
-        )
+                future = executor.submit(run_one_dataset_sweep_task, task)
+                future_to_label[future] = label
 
-        try:
-            results = comp.run_comparison()
-        except Exception as exc:
-            print(f"  Skipping dataset due to simulation error: {exc}")
-            skipped.append(label)
-            continue
+            completed = 0
 
-        mean_ac = float(np.mean(results["is_ac"]))
-        std_ac = float(np.std(results["is_ac"], ddof=1))
-        mean_hest = float(np.mean(results["is_heston"]))
-        std_hest = float(np.std(results["is_heston"], ddof=1))
+            for future in as_completed(future_to_label):
+                label = future_to_label[future]
+                completed += 1
 
-        sweep_records.append({
-            "dataset": label,
-            "mean_ac": mean_ac,
-            "std_ac": std_ac,
-            "mean_hest": mean_hest,
-            "std_hest": std_hest,
-            "mean_diff": mean_ac - mean_hest,
-            "sharpe_ac": calculate_sharpe_like(mean_ac, std_ac),
-            "sharpe_hest": calculate_sharpe_like(mean_hest, std_hest),
-            "rho": heston_params.get("rho"),
-        })
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    print(f"\n[{completed}/{len(tasks)}] {label}: failed with executor error: {exc}")
+                    skipped.append(label)
+                    continue
+
+                if result["ok"]:
+                    print(f"\n[{completed}/{len(tasks)}] {result['dataset']}: finished")
+                    sweep_records.append(result["record"])
+                else:
+                    print(f"\n[{completed}/{len(tasks)}] {result['dataset']}: skipped - {result['reason']}")
+                    skipped.append(result["dataset"])
 
     if not sweep_records:
         print("No datasets produced valid sweep results.")
         return
 
-    mean_ac_arr = np.array([r["mean_ac"] for r in sweep_records])
-    mean_hest_arr = np.array([r["mean_hest"] for r in sweep_records])
-    sharpe_ac_arr = np.array([r["sharpe_ac"] for r in sweep_records])
-    sharpe_hest_arr = np.array([r["sharpe_hest"] for r in sweep_records])
+    mean_ac_arr = np.array([r["mean_ac"] for r in sweep_records], dtype=float)
+    mean_hest_arr = np.array([r["mean_hest"] for r in sweep_records], dtype=float)
+    sharpe_ac_arr = np.array([r["sharpe_ac"] for r in sweep_records], dtype=float)
+    sharpe_hest_arr = np.array([r["sharpe_hest"] for r in sweep_records], dtype=float)
     diff_arr = mean_ac_arr - mean_hest_arr
 
-    t_stat, p_two = ttest_rel(mean_ac_arr, mean_hest_arr)
-    p_ttest = p_two / 2 if t_stat > 0 else 1.0 - p_two / 2
+    valid_mean_mask = (
+        np.isfinite(mean_ac_arr)
+        & np.isfinite(mean_hest_arr)
+    )
 
-    t_s, p_two_s = ttest_rel(sharpe_ac_arr, sharpe_hest_arr)
-    p_ttest_sharpe = p_two_s / 2 if t_s > 0 else 1.0 - p_two_s / 2
+    mean_ac_valid = mean_ac_arr[valid_mean_mask]
+    mean_hest_valid = mean_hest_arr[valid_mean_mask]
+    diff_valid = mean_ac_valid - mean_hest_valid
+
+    if len(diff_valid) < 2:
+        t_stat = np.nan
+        p_ttest = np.nan
+        ttest_warning = "Across-dataset paired t-test skipped: need at least 2 valid datasets."
+    elif np.allclose(diff_valid, diff_valid[0]):
+        t_stat = np.nan
+        p_ttest = np.nan
+        ttest_warning = "Across-dataset paired t-test skipped: paired differences have zero variance."
+    else:
+        t_stat, p_two = ttest_rel(mean_ac_valid, mean_hest_valid)
+        p_ttest = p_two / 2 if t_stat > 0 else 1.0 - p_two / 2
+        ttest_warning = None
+
+    valid_sharpe_mask = (
+        np.isfinite(sharpe_ac_arr)
+        & np.isfinite(sharpe_hest_arr)
+    )
+
+    sharpe_ac_valid = sharpe_ac_arr[valid_sharpe_mask]
+    sharpe_hest_valid = sharpe_hest_arr[valid_sharpe_mask]
+    sharpe_diff_valid = sharpe_hest_valid - sharpe_ac_valid
+
+    if len(sharpe_diff_valid) < 2:
+        t_s = np.nan
+        p_ttest_sharpe = np.nan
+        sharpe_warning = "Sharpe-like paired t-test skipped: need at least 2 valid datasets."
+    elif np.allclose(sharpe_diff_valid, sharpe_diff_valid[0]):
+        t_s = np.nan
+        p_ttest_sharpe = np.nan
+        sharpe_warning = "Sharpe-like paired t-test skipped: paired differences have zero variance."
+    else:
+        # Alternative: Heston reliability > AC reliability.
+        t_s, p_two_s = ttest_rel(sharpe_hest_valid, sharpe_ac_valid)
+        p_ttest_sharpe = p_two_s / 2 if t_s > 0 else 1.0 - p_two_s / 2
+        sharpe_warning = None
 
     print("\n========== SWEEP SUMMARY AC VS HESTON ==========")
     print(f"Datasets evaluated  : {len(sweep_records)}")
@@ -549,22 +690,47 @@ def run_dataset_sweep(params):
         print(f"Datasets skipped    : {len(skipped)} -> {', '.join(skipped)}")
 
     print("\nPer-dataset mean implementation shortfall and reliability:")
-    print(f"{'Dataset':<35} {'Mean_AC':>10} {'Mean_Hest':>10} {'Diff':>10} {'Sharpe_AC':>12} {'Sharpe_Hest':>12}")
-    for record in sweep_records:
-        print(f"{record['dataset']:<35} {record['mean_ac']:10.5f} {record['mean_hest']:10.5f} {record['mean_diff']:10.5f} {record['sharpe_ac']:12.5f} {record['sharpe_hest']:12.5f}")
+    print(
+        f"{'Dataset':<35} "
+        f"{'Mean_AC':>12} "
+        f"{'Mean_Hest':>12} "
+        f"{'Diff':>12} "
+        f"{'Sharpe_AC':>12} "
+        f"{'Sharpe_Hest':>12}"
+    )
+
+    for record in sorted(sweep_records, key=lambda r: r["dataset"]):
+        print(
+            f"{record['dataset']:<35} "
+            f"{record['mean_ac']:12.5f} "
+            f"{record['mean_hest']:12.5f} "
+            f"{record['mean_diff']:12.5f} "
+            f"{record['sharpe_ac']:12.5f} "
+            f"{record['sharpe_hest']:12.5f}"
+        )
 
     print("\n--- Across-dataset paired t-test ---")
-    print(f"Mean difference (AC−Hest) across datasets: {diff_arr.mean():.5f}")
-    print(f"t-statistic: {t_stat:.4f}")
-    print(f"one-sided p-value: {p_ttest:.4f}")
-    print(f"Heston has lower mean IS across datasets: {p_ttest < 0.05}")
+    print(f"Valid datasets for mean test: {len(diff_valid)}")
+    print(f"Mean difference (AC−Hest) across datasets: {diff_valid.mean():.5f}")
+
+    if ttest_warning is not None:
+        print(f"Warning: {ttest_warning}")
+    else:
+        print(f"t-statistic: {t_stat:.4f}")
+        print(f"one-sided p-value: {p_ttest:.4f}")
+        print(f"Heston has lower mean IS across datasets: {p_ttest < 0.05}")
 
     print("\n--- Sharpe-like reliability comparison ---")
-    print(f"Mean Sharpe_AC: {sharpe_ac_arr.mean():.5f}")
-    print(f"Mean Sharpe_Hest: {sharpe_hest_arr.mean():.5f}")
-    print(f"t-statistic (Sharpe): {t_s:.4f}")
-    print(f"one-sided p-value (Sharpe): {p_ttest_sharpe:.4f}")
-    print(f"Heston has higher reliability across datasets: {p_ttest_sharpe < 0.05}")
+    print(f"Valid datasets for Sharpe test: {len(sharpe_diff_valid)}")
+    print(f"Mean Sharpe_AC: {sharpe_ac_valid.mean():.5f}")
+    print(f"Mean Sharpe_Hest: {sharpe_hest_valid.mean():.5f}")
+
+    if sharpe_warning is not None:
+        print(f"Warning: {sharpe_warning}")
+    else:
+        print(f"t-statistic (Sharpe): {t_s:.4f}")
+        print(f"one-sided p-value (Sharpe): {p_ttest_sharpe:.4f}")
+        print(f"Heston has higher reliability across datasets: {p_ttest_sharpe < 0.05}")
 
     print("\nSweep complete. Use the model comparison suite for detailed analysis on a single parameter set.")
 
