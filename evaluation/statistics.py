@@ -52,7 +52,7 @@ def calculate_test_suite(is_ac: np.ndarray, is_hest: np.ndarray, starting_vols: 
     ----------
     is_ac          : 1-D array of IS losses under the AC model.
     is_hest        : 1-D array of IS losses under the Heston model.
-    starting_vols  : 1-D array of starting volatilities (same length), used for
+    starting_vols  : 1-D volatility metric per sample (same length), used for
                      regime analysis. Pass None to skip that section.
     rho_sweep      : dict mapping rho value → {'is_ac': ..., 'is_hest': ...}
                      for the leverage-effect sensitivity analysis. Pass None to skip.
@@ -68,6 +68,8 @@ def calculate_test_suite(is_ac: np.ndarray, is_hest: np.ndarray, starting_vols: 
 
     is_ac = np.asarray(is_ac, dtype=float)
     is_hest = np.asarray(is_hest, dtype=float)
+    if n_regimes < 1:
+        raise ValueError("n_regimes must be at least 1")
     diff = is_ac - is_hest
 
     results = {}
@@ -140,27 +142,65 @@ def calculate_test_suite(is_ac: np.ndarray, is_hest: np.ndarray, starting_vols: 
     # Regime analysis
     if starting_vols is not None:
         starting_vols = np.asarray(starting_vols, dtype=float)
-        boundaries = np.percentile(starting_vols, np.linspace(0, 100, n_regimes + 1))
+        if len(starting_vols) != len(is_ac):
+            raise ValueError("starting_vols must have the same length as is_ac and is_hest")
+
         regime_labels = ["low-vol", "mid-vol", "high-vol"] if n_regimes == 3 else \
                         [f"regime_{i}" for i in range(n_regimes)]
- 
         results["regime_analysis"] = {}
-        for i in range(n_regimes):
-            lo, hi = boundaries[i], boundaries[i + 1]
-            mask = (starting_vols >= lo) & (starting_vols <= hi)
-            ac_r, hest_r = is_ac[mask], is_hest[mask]
- 
-            if mask.sum() < 10:
-                results["regime_analysis"][regime_labels[i]] = {"warning": "too few samples"}
+        regime_splits = []
+
+        finite_mask = (
+            np.isfinite(starting_vols)
+            & np.isfinite(is_ac)
+            & np.isfinite(is_hest)
+        )
+        if not np.any(finite_mask):
+            results["regime_analysis"]["unavailable"] = {
+                "warning": "no finite volatility metrics available"
+            }
+        elif np.allclose(starting_vols[finite_mask], starting_vols[finite_mask][0]):
+            results["regime_analysis"]["unavailable"] = {
+                "warning": "volatility metric has no variation; cannot form regimes",
+                "n_samples": int(finite_mask.sum()),
+            }
+        else:
+            regime_values = starting_vols[finite_mask]
+            ac_valid = is_ac[finite_mask]
+            hest_valid = is_hest[finite_mask]
+            sorted_idx = np.argsort(regime_values, kind="mergesort")
+            regime_splits = np.array_split(sorted_idx, n_regimes)
+
+        for i, bucket_idx in enumerate(regime_splits):
+            label = regime_labels[i]
+            if len(bucket_idx) == 0:
+                results["regime_analysis"][label] = {
+                    "vol_range": (np.nan, np.nan),
+                    "n_samples": 0,
+                    "warning": "too few samples",
+                }
                 continue
- 
+
+            bucket_vols = regime_values[bucket_idx]
+            lo, hi = float(np.min(bucket_vols)), float(np.max(bucket_vols))
+            ac_r, hest_r = ac_valid[bucket_idx], hest_valid[bucket_idx]
+            n_samples = len(bucket_idx)
+
+            if n_samples < 10:
+                results["regime_analysis"][label] = {
+                    "vol_range": (lo, hi),
+                    "n_samples": int(n_samples),
+                    "warning": "too few samples",
+                }
+                continue
+
             regime_diff = ac_r - hest_r
             # Check if all differences are zero (cannot run Wilcoxon in this case)
             non_zero_regime = regime_diff[regime_diff != 0]
             if len(non_zero_regime) == 0 or np.allclose(regime_diff, 0):
-                results["regime_analysis"][regime_labels[i]] = {
-                    "vol_range":   (float(lo), float(hi)),
-                    "n_samples":   int(mask.sum()),
+                results["regime_analysis"][label] = {
+                    "vol_range":   (lo, hi),
+                    "n_samples":   int(n_samples),
                     "median_diff": float(np.median(regime_diff)),
                     "wilcoxon_stat": None,
                     "p_value":     None,
@@ -169,9 +209,9 @@ def calculate_test_suite(is_ac: np.ndarray, is_hest: np.ndarray, starting_vols: 
                 }
             else:
                 w_r, p_r = wilcoxon(regime_diff, alternative="greater")
-                results["regime_analysis"][regime_labels[i]] = {
-                    "vol_range":   (float(lo), float(hi)),
-                    "n_samples":   int(mask.sum()),
+                results["regime_analysis"][label] = {
+                    "vol_range":   (lo, hi),
+                    "n_samples":   int(n_samples),
                     "median_diff": float(np.median(regime_diff)),
                     "wilcoxon_stat": float(w_r),
                     "p_value":     float(p_r),
@@ -363,7 +403,13 @@ def print_results(results: dict, alpha_test: float = 0.05) -> None:
         print(f"{sep}\n6. Regime Analysis (Volatility Buckets)\n{sep}")
         for regime, r in results["regime_analysis"].items():
             if "warning" in r:
-                print(f"   {regime}: {r['warning']}")
+                details = []
+                if "vol_range" in r and np.all(np.isfinite(r["vol_range"])):
+                    details.append(f"vol [{r['vol_range'][0]:.3f}, {r['vol_range'][1]:.3f}]")
+                if "n_samples" in r:
+                    details.append(f"n={r['n_samples']}")
+                suffix = f" ({', '.join(details)})" if details else ""
+                print(f"   {regime}: {r['warning']}{suffix}")
                 continue
             print(f"   {regime} (vol ∈ [{r['vol_range'][0]:.3f}, {r['vol_range'][1]:.3f}], "
                   f"n={r['n_samples']})")

@@ -65,11 +65,12 @@ class ModelComparator:
     def _run_heston_paths(self, trades, rng):
         """
         Evaluate the AC trading strategy on Heston price paths.
-        Returns an IS array of length num_sims, plus starting vol for each path.
+        Returns an IS array of length num_sims, plus a realized volatility
+        summary for each path to use in regime analysis.
         """
         h = self.model_hest
-        is_samples    = np.full(self.num_sims, np.nan)
-        starting_vols = np.full(self.num_sims, np.nan)
+        is_samples = np.full(self.num_sims, np.nan)
+        regime_vols = np.full(self.num_sims, np.nan)
         for i in range(self.num_sims):
             path_seed = int(rng.integers(0, 1_000_000_000))
             price_path, variance_path = self.market_env.simulate_unaffected_price_heston(
@@ -82,17 +83,23 @@ class ModelComparator:
                 seed  = path_seed,
             )
 
+            if not np.all(np.isfinite(variance_path)):
+                print(f"Warning: invalid Heston variance path {i} contains non-finite values")
+                is_samples[i] = np.nan
+                regime_vols[i] = np.nan
+                continue
+
             # Discard numerically invalid or absurd paths before IS calculation
             if not np.all(np.isfinite(price_path)):
                 print(f"Warning: invalid Heston price path {i} contains non-finite values")
                 is_samples[i] = np.nan
-                starting_vols[i] = np.nan
+                regime_vols[i] = np.nan
                 continue
 
             if np.nanmax(price_path) > self.market_env.S0 * 2.0 or np.nanmin(price_path) < self.market_env.S0 * 0.2:
                 print(f"Warning: Heston price path {i} is implausible (extreme price move)")
                 is_samples[i] = np.nan
-                starting_vols[i] = np.nan
+                regime_vols[i] = np.nan
                 continue
 
             try:
@@ -107,8 +114,9 @@ class ModelComparator:
                 print(f"Warning: invalid Heston path {i}: {exc}")
                 is_samples[i] = np.nan
 
-            starting_vols[i] = np.sqrt(max(variance_path[0], 0.0))   # convert variance → vol
-        return is_samples, starting_vols
+            path_vols = np.sqrt(np.maximum(variance_path, 0.0))
+            regime_vols[i] = float(np.mean(path_vols))
+        return is_samples, regime_vols
 
     def _filter_valid_pairs(self, is_ac, is_hest, starting_vols):
         mask = np.isfinite(is_ac) & np.isfinite(is_hest)
@@ -142,7 +150,7 @@ class ModelComparator:
         results : dict from calculate_test_suite, plus:
                   "is_ac"       — raw IS array under GBM dynamics
                   "is_heston"   — raw IS array under Heston dynamics
-                  "starting_vols" — initial vol for each Heston path (for regime analysis)
+                  "starting_vols" - per-path volatility metric for regime analysis
         """
         stat_kwargs = stat_kwargs or {}
         # Pre-compute the AC optimal strategy once — identical for both evaluations
@@ -163,7 +171,7 @@ class ModelComparator:
  
         is_ac, is_heston, starting_vols = self._filter_valid_pairs(is_ac, is_heston, starting_vols)
  
-        # Allow caller to override starting_vols (e.g. collected externally)
+        # Allow caller to override the regime metric (e.g. collected externally)
         starting_vols = stat_kwargs.pop("starting_vols", starting_vols)
  
         print("Running statistical test suite ...")
