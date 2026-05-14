@@ -6,7 +6,7 @@ class Backtester:
         self.strategy = strategy_model
         self.market = market_env
 
-    def run(self, seed=None, forced_liquidation_discount=0.05): # not necesarily sure if seed is needed
+    def run(self, seed=None, forced_liquidation_discount=0.05, use_correction=False): # not necesarily sure if seed is needed
         """
         Run the backtest.
 
@@ -17,6 +17,8 @@ class Backtester:
         forced_liquidation_discount : float
             Extra percentage discount applied to final forced liquidation
             if inventory remains at T
+        use_correction : bool
+            Whether to use the Heston asymptotic correction for the trade schedule
 
         Returns
         -------
@@ -27,8 +29,13 @@ class Backtester:
         """
         # Strategy outputs
         times = self.strategy.times
-        inventory_path = self.strategy.compute_inventory_trajectory()
-        trades = self.strategy.compute_trade_list()
+        trades = self.strategy.compute_trade_list(use_correction=use_correction)
+        
+        # Recalculate inventory path from trades for consistency
+        inventory_path = np.zeros(self.strategy.N + 1)
+        inventory_path[0] = self.strategy.X
+        for k in range(self.strategy.N):
+            inventory_path[k+1] = inventory_path[k] - trades[k]
 
         # Market path
         prices, variances = self.market.simulate_unaffected_price_heston(

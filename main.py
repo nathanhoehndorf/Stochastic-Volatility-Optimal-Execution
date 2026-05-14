@@ -361,6 +361,11 @@ def calculate_sharpe_like(mean_is: float, std_is: float) -> float:
 
 
 def build_objects(params, lambd):
+    # Extract Heston parameters if they exist
+    heston_params = params.get("heston", {})
+    xi = heston_params.get("xi") if isinstance(heston_params, dict) else None
+    rho = heston_params.get("rho") if isinstance(heston_params, dict) else None
+
     strategy = ac.AlmgrenChrissModel(
         X=params["X"],
         T=params["T"],
@@ -368,7 +373,9 @@ def build_objects(params, lambd):
         sigma=params["sigma"],
         lambd=lambd,
         eta=params["eta"],
-        gamma=params["gamma"]
+        gamma=params["gamma"],
+        xi=xi,
+        rho=rho
     )
 
     env = me.MarketEnvironment(
@@ -387,7 +394,8 @@ def build_objects(params, lambd):
         N=params["N"],
         sigma=params["sigma"],
         eta=params["eta"],
-        gamma=params["gamma"]
+        gamma=params["gamma"],
+        heston_params=heston_params
     )
 
     back = b.Backtester(strategy_model=strategy, market_env=env)
@@ -410,7 +418,8 @@ def optimize_lambda(params):
         N=params["N"],
         sigma=params["sigma"],
         eta=params["eta"],
-        gamma=params["gamma"]
+        gamma=params["gamma"],
+        heston_params=params.get("heston")
     )
 
     # ----- Step 1: coarse search -----
@@ -467,15 +476,19 @@ def optimize_lambda(params):
 def run_single_backtest(params):
     lambd = get_float("Lambda", 0.5)
 
+    use_corr = input("Use Heston asymptotic correction? (y/n) [n]: ").strip().lower() == "y"
+
     strategy, env, sim, back = build_objects(params, lambd)
 
-    log_df, summary = back.run(seed=42)
+    log_df, summary = back.run(seed=42, use_correction=use_corr)
 
-    print("\nBacktest log:")
-    print(log_df)
-
-    print("\nBacktest summary:")
-    print(summary)
+    print(f"\nBacktest summary (Correction={'ON' if use_corr else 'OFF'}):")
+    for k, v in summary.items():
+        print(f"  {k}: {v}")
+    
+    show_log = input("\nShow transaction log? (y/n) [n]: ").strip().lower()
+    if show_log == "y":
+        print(log_df)
 
 
 def run_single_lambda_mc(params):

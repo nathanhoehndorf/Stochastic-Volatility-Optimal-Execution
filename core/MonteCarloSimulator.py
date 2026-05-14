@@ -23,8 +23,9 @@ def _run_lambda_worker(args):
         "std_is": res["std_is"],
         "kappa": res["kappa"]
     }
+
 class MonteCarloSimulator:
-    def __init__(self, S0, X, T, N, sigma, eta, gamma):
+    def __init__(self, S0, X, T, N, sigma, eta, gamma, heston_params=None):
         self.S0 = S0
         self.X = X
         self.T = T
@@ -32,13 +33,23 @@ class MonteCarloSimulator:
         self.sigma = sigma
         self.eta = eta
         self.gamma = gamma
+        self.heston_params = heston_params or {
+            "v0": 0.04,
+            "mu": 0.0,
+            "theta": 2.0,
+            "omega": 0.04,
+            "xi": 0.3,
+            "rho": -0.7,
+        }
 
-    def run_single_lambda(self, lambd, n_sims=1000, seed=None): #very likely this function will be too slow and not needed
+    def run_single_lambda(self, lambd, n_sims=1000, seed=None, use_correction=False):
         """
         Run Monte Carlo for one lambda value.
         Returns implementation shortfall samples and summary stats.
         """
         rng = np.random.default_rng(seed)
+        
+        h = self.heston_params
 
         strategy = ac.AlmgrenChrissModel(
             X=self.X,
@@ -47,7 +58,9 @@ class MonteCarloSimulator:
             sigma=self.sigma,
             lambd=lambd,
             eta=self.eta,
-            gamma=self.gamma
+            gamma=self.gamma,
+            xi=h.get("xi"),
+            rho=h.get("rho")
         )
 
         market = me.MarketEnvironment(
@@ -59,22 +72,25 @@ class MonteCarloSimulator:
             eta=self.eta
         )
 
-        trades = strategy.compute_trade_list()
-        inventory = strategy.compute_inventory_trajectory()
+        trades = strategy.compute_trade_list(use_correction=use_correction)
+        inventory = (strategy.compute_perturbed_inventory_trajectory() 
+                     if use_correction else strategy.compute_inventory_trajectory())
 
         is_samples = np.zeros(n_sims)
 
         for i in range(n_sims):
             price_path, variance_path = market.simulate_unaffected_price_heston(
-            v0=0.04,
-            mu=0.0,
-            theta=2.0,
-            omega=0.04,
-            xi=0.3,
-            rho=-0.7,
-            seed=None if seed is None else rng.integers(0, 1_000_000_000)) # may want different interaction with the seed here than currently present
-            total_cash = market.apply_market_impact(price_path, trades) # make new function? Find other name in MarketEnvironment? 
-            total_cash = total_cash['total_cash']
+                v0    = h.get("v0", 0.04),
+                mu    = h.get("mu", 0.0),
+                theta = h.get("theta", 2.0),
+                omega = h.get("omega", 0.04),
+                xi    = h.get("xi", 0.3),
+                rho   = h.get("rho", -0.7),
+                seed  = None if seed is None else int(rng.integers(0, 1_000_000_000))
+            )
+            
+            total_cash_dict = market.apply_market_impact(price_path, trades)
+            total_cash = total_cash_dict['total_cash']
             is_samples[i] = market.implementation_shortfall(self.X, total_cash)
 
         result = {
@@ -103,7 +119,8 @@ class MonteCarloSimulator:
             "N": self.N,
             "sigma": self.sigma,
             "eta": self.eta,
-            "gamma": self.gamma
+            "gamma": self.gamma,
+            "heston_params": self.heston_params
         }
 
         tasks = []
@@ -113,11 +130,13 @@ class MonteCarloSimulator:
             tasks.append((simulator_params, float(lambd), n_sims, lambda_seed))
 
         if not parallel:
-            results = [_run_lambda_worker(task) for task in tasks]
+            results = []
+            for task in tasks:
+                results.append(_run_lambda_worker(task))
             return pd.DataFrame(results).sort_values("lambda").reset_index(drop=True)
 
         if max_workers is None:
-            max_workers = max(1, os.cpu_count() - 1)
+            max_workers = max(1, (os.cpu_count() or 2) - 1)
 
         results = []
 

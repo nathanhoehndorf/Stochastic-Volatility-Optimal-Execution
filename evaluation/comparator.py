@@ -9,7 +9,7 @@ class ModelComparator:
         Parameters
         ----------
         model_ac    : AlmgrenChrissModel — provides the optimal trading strategy.
-                      Expected attributes: X, T, N, sigma, eta, gamma, lambd
+                      Expected attributes: X, T, N, sigma, eta, gamma, lambd, xi, rho
         model_hest  : HestonModel (or similar) — provides Heston parameters only.
                       Expected attributes: v0, mu, theta, omega, xi, rho
         market_env  : MarketEnvironment — used directly for price simulation and IS calc.
@@ -23,6 +23,12 @@ class ModelComparator:
         self.market_env = market_env
         self.num_sims = num_sims
         self.seed = seed 
+        
+        # Sync Heston parameters to the AC model if provided
+        if hasattr(model_hest, 'xi'):
+            self.model_ac.xi = model_hest.xi
+        if hasattr(model_hest, 'rho'):
+            self.model_ac.rho = model_hest.rho
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -42,7 +48,7 @@ class ModelComparator:
     
     def _run_ac_paths(self, trades, rng):
         """
-        Evaluate the AC trading strategy on GBM price paths.
+        Evaluate a trading strategy on GBM price paths.
         Returns an IS array of length num_sims.
         """
         is_samples = np.full(self.num_sims, np.nan)
@@ -64,7 +70,7 @@ class ModelComparator:
     
     def _run_heston_paths(self, trades, rng):
         """
-        Evaluate the AC trading strategy on Heston price paths.
+        Evaluate a trading strategy on Heston price paths.
         Returns an IS array of length num_sims, plus a realized volatility
         summary for each path to use in regime analysis.
         """
@@ -132,42 +138,36 @@ class ModelComparator:
 
     def run_comparison(self, stat_kwargs=None):
         """
-        Run Monte Carlo under both GBM (AC) and Heston price dynamics using the
-        same AC optimal trading strategy, then pass the paired IS arrays to
-        calculate_test_suite.
- 
-        The two RNGs are seeded independently from the same base seed, so the
-        paths are paired in sample size but not artificially correlated.
- 
-        Parameters
-        ----------
-        stat_kwargs : dict, optional
-            Extra keyword arguments forwarded to calculate_test_suite
-            (e.g. alpha_levels, n_bootstrap, n_regimes, rho_sweep).
+        Run Monte Carlo comparison:
+        1. Classic AC strategy under GBM (Baseline)
+        2. Heston-Corrected AC strategy under Heston dynamics
  
         Returns
         -------
         results : dict from calculate_test_suite, plus:
-                  "is_ac"       — raw IS array under GBM dynamics
-                  "is_heston"   — raw IS array under Heston dynamics
+                  "is_ac"       — raw IS array under GBM dynamics (Classic)
+                  "is_heston"   — raw IS array under Heston dynamics (Corrected)
                   "starting_vols" - per-path volatility metric for regime analysis
         """
         stat_kwargs = stat_kwargs or {}
-        # Pre-compute the AC optimal strategy once — identical for both evaluations
-        trades = self.model_ac.compute_trade_list()
+        
+        # 1. Baseline: Classic AC trades
+        trades_classic = self.model_ac.compute_trade_list(use_correction=False)
+        
+        # 2. Challenger: Heston-Corrected trades
+        trades_corrected = self.model_ac.compute_trade_list(use_correction=True)
 
         # Seed the two RNGs from the same base so the experiment is reproducible
-        # but the two path sequences are independent
         rng_ac   = np.random.default_rng(self.seed)
         rng_hest = np.random.default_rng(
             None if self.seed is None else self.seed + 1
         )
 
-        print(f"Running {self.num_sims} AC (GBM) paths ...")
-        is_ac = self._run_ac_paths(trades, rng_ac)
+        print(f"Running {self.num_sims} Classic AC (GBM) paths ...")
+        is_ac = self._run_ac_paths(trades_classic, rng_ac)
  
-        print(f"Running {self.num_sims} Heston paths ...")
-        is_heston, starting_vols = self._run_heston_paths(trades, rng_hest)
+        print(f"Running {self.num_sims} Corrected Heston-AC (Heston) paths ...")
+        is_heston, starting_vols = self._run_heston_paths(trades_corrected, rng_hest)
  
         is_ac, is_heston, starting_vols = self._filter_valid_pairs(is_ac, is_heston, starting_vols)
  
