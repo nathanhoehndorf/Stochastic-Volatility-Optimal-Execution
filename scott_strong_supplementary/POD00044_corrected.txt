@@ -1,0 +1,104 @@
+Title: Optimal Execution of Liquidating Stocks Under Stochastic Volatility
+Speakers: Group of five (includes Milo, Nathan Hoehndorf, Nathan Hess, Danielle, and Ben)
+
+1. Introduction and Market Overview
+
+So, up again, this is our project. It's all about optimal execution of liquidating a lot of stocks under stochastic volatility by us five. I figure most of you know us by now.
+
+>> So, just a quick overview of how bidding and stock market generally works. You have bids and asks, and you're going to have a mean bid and mean ask, but the actual price that is settled on is not dependent on that at all. It's actually dependent on the intersection of the distributions of both.
+
+This is important for our project because we're looking at a case where we're trying to liquidate assets, and if we do it too quick, we place a lot of sell orders, and you see this entire distribution move and the price goes down, which means each one we sell, we make less money off of.
+
+2. Market Impact and Price Risk
+
+>> Okay. So, yeah, market impact is essentially the impact of selling too quick, moving that distribution, and then price risk is, if it is at a good price, you don't want to wait until that price changes. So, we're trying to look at a model in which they've looked at constant volatility. So, they've modeled this market and assumed that the volatility will stay the same. We're assuming that the volatility will change, and that's the change we're bringing to the model.
+
+>> The two impacts here are temporary versus permanent. Temporary is you're selling a bunch of stuff and there's just like that makes stuff wonky for a moment, and then there's like, "Oh, hey, there's less shares in the market now," and that's the permanent impact.
+
+3. The Almgren-Chriss Framework
+
+Now, we can get to some fun stuff. So, first, we have to define the original model that we were looking at. So, two guys, Almgren and Chris, in about 1999 to 2001, made this original model for liquidating these high amounts of assets, and everything was nice and discrete. Essentially, they were like, "Oh, okay. So, your inventory will change according to a static rate, and this X sub t basically right in the middle of the slide is there right under the delta t and above the X sub zero equals initial whatever the heck." That's like their final solution. So, that little t in the sinh is the only actual variable, and everything else is just a bunch of constants that they derived through calculus.
+
+So, the problem with this is it's very simplistic, and well, yeah, essentially that. It's very simplistic. Only in super idealized scenarios will it ever be accurate. So, like Milo said, it assumes that our sigma, our standard deviation, our volatility is constant.
+
+4. Mathematical Foundations, Itô Calculus, Heston Model and Mean Reversion
+
+So, in order to be able to talk about the Heston model, which is how we make volatility stochastic, we have to talk about a little bit of the math that goes into it. So, essentially, 1800s, we realized calculus is wrong. 150 years later, this happens. So, what this is, is a guy named Ido. We learned about him a little bit when we were doing our stochastic stuff in class. He basically figured out how you can take derivatives and do calculus to random variables. Why is it weird? Because everything we do in calculus is based off of a subset of the real numbers, and I don't know about you, but like coin flips and stuff isn't real numbers. It's like zero and one, or heads and tails. So, that's why we need to do weird stuff.
+
+But if you see the first term, it's drift. It's mean with respect to time, and the second one is standard deviation times a random shock. That's, do we know Brownian motion? Okay, yeah. That's Brownian motion. And then that last line is really where Ido comes into play. It shows that we can actually like take an expansion of a function that has a variable that's a random variable, and we can go do calculus on it.
+
+So, now that we kind of know what we're looking at, we want to look at that top right equation. That's the Heston model. So, you can see that next to the DT, that's mean stuff, and next to the DWT, that's standard deviation stuff. How can you tell? Well, absolutely.
+
+>> This looks very simple, very close to the model people use for mean reversion when they expect the model to revert back to a mean. We're doing the same thing, but for volatility.
+
+>> Yeah, it doesn't look close to it. This just is mean reversion. Omega is the mean. V is a variable. And so, when V is above omega, you're going to get a negative number, and DV is going to bring your V down. When your V is high, right, it goes down. When your V is low, then you get a positive number when you take omega minus V, it goes back up. And then that second term is literally just like random shocks. So, V is your variance. You'll never guess what the square root of it is. But that other parameter next to it is actually what's important. That's our volatility of our volatility. So, that's the square root of the variance of the square root of our variance of our asset price, which might sound like it's a bunch of stuff like making it all complicated, but it's like analogous to a second derivative. If like the volatility is like the average change of our asset price, this is the average change of the average change of our asset price. And what's really nice is generally it's not that big, and that's going to really come in handy in a moment.
+
+And in that bottom right is just the continuous time version of what Almgren-Chris did. They made it all discrete, but now we're like, look, X, the amount of inventory we have is equal to the amount of stuff we sold over a time step times the time step. Pretty intuitive.
+
+And then I'm not going to go into super big detail on the asset price. Essentially, that gamma is a number that's supposed to represent that temporary impact. How is it derived? Go spend six years getting a PhD in finance and come back and tell me. And then that variance process is that Heston model we saw before. And really importantly, we have this correlation down here. So, if these Brownian motions were independent, we basically have no way to get asset price and variance to talk to each other. So, we just say there's some correlation. And we're going to call it that row and that'd be like, you use data to go figure that out.
+
+5. Hamilton-Jacobi-Bellman and Asymptotic Expansion
+
+>> So, now that we have all the pieces together, we actually have to like start putting it together because we have Almgren-Chris who has a good starting place, but as we said, it was too simplistic. And now we have Heston that actually allows that volatility, volatility. And the Hamilton-Jacobi or as if you're Scott Strong, Jacobi, Bellman equation. And it's super complicated, but all that's actually needed to know is that it's just a giant PDE.
+
+And in setting up the PDE, you make a lot of assumptions, that assumption is basically we're going to take the most optimal way to get to our destination. And it's like a graph of the GPS. We're at a given point. It'll know what the most optimal way to your destination is. It might not exactly tell you like which way to go, but it just knows that it has the optimal way.
+
+Yeah, and it's basically the principle of dynamic programming if you guys remember from like (CSCI) 200 or 220 or whatever classes you've taken. It's just like you break the problem down into a sub problem, and you assume that in the future, you're not going to do it wrong. And if that just keeps staying true, induction, it's right.
+
+Yeah, so one of the things about — can you go back? Oh, yeah. Yeah. That's what — all right. One of the things about like the HDB is that like you have this giant ugly PDE at the bottom that is nonlinear. And like you can't just solve this in any normal methods, at least not even taught in PDE's class, for anyone who has or is taking it.
+
+So we use asymptotic perturbation, which like in simplistic terms is just like a Maclaurin expansion. And we started taking it into degrees of order. And one of the main things you can notice is volatility of volatility is like that factor that's going down. And one of the main assumptions we have is that volatility of volatility is small. Like we're not actually changing the volatility that greatly. And that actually allows us to make the expansion as it is going and treating terms.
+
+And one of the main cool things about it is that if volatility of volatility was 0, we only have this term. And it actually gets us back to Algrem and Chris, which is what they assume. There is no volatility of volatility.
+
+Yeah, yeah. I do also want to note that like basically we're using the same logic as, oh, higher order terms. If you take a really small number and raise it to a power, it's still really small. Basically same thing. Yeah, we should do like a Taylor expansion around a very small non-zero value. But we're not exactly right anyway. And so, oh no, we're off by 0.8 zeros. But because it's that small change, we also kind of inherently assume that our volatility is not changing very quickly, which we might see come in later.
+
+So when we actually go in to solve, we actually remove some of the terms from solving the p, or at least in the way of doing it with asymptotic perturbation. Because when taking the derivative, what we want at the end, those terms would just go away because they didn't have the variable we wanted. So we just simplified it down to these phi terms of phi 0 and phi 1. And you can see the results we have over here on the right side. And these are the terms we have now. And again, all these variables are defined.
+
+6. HJB Results and Updated Trading Rate
+
+Then this big, ugly equation up here. But during the HJB process, when we were making assumptions, we actually had an equation made that related to the trade we make at step t. And we actually had that related to our J function. So now that we have our approximation through the asymptotic perturbation, we can actually go ahead and plug that in to this equation that we assumed earlier to actually get to our optimal trading rate, which is on the next slide.
+
+And yes, it's to this lovely equation here, which is our now adjusted for volatility of volatility trading rate that we can do and compare to Almgren and Chris. And again, as Nathan had mentioned earlier, rho has that correlation there. And it allows it to actually be able to relate and communicate to each other. And if it's positive, there's rising risk. And it's going positively together. But if it's negative, then there's an appreciation on how that dynamic works.
+
+>>I don't remember who was supposed to talk about this, but I will. Basically, this is just a summary of what each part is doing and how it works together. Because we're short on time, Almgren and Chris is essentially figuring out what trades you should make and when. Heston is trying to figure out how you should basically handle a changing volatility. And so together, it lets you choose those trades with consideration for a changing volatility.
+
+7. Computational Strategy and Simulation
+
+All right, and so the data set that we used was the lobster data set. It kind of sounds like it'd be information on lobster prices, but it's just the limited order book system. This gives daily information on various different types of stocks. And it's by bid and ask orders at variance at different levels. The levels indicate how many orders, bid and ask, are considered at each time period. And for the free data, we only really had access to Amazon, Google, Intel, and Microsoft. I think these were from 2012.
+
+And yeah, so the big bid-ask spread is kind of what we're trying to make money on. That's kind of the inherent process of the project. And so we're just kind of going through these files of existing financial data and trying to apply our model to see if we can do a little bit better.
+
+And so the computation data, we calibrate all these terms from the lobster data that we're given. It's just a, I think, Kyle analysis, something like that. And then we run Monte Carlo simulations to kind of get information from that of what is best to use for lambda and a few other parameters. And the main calibrated parameters that we care about are the ones that are fed into the Heston along with eta and gamma.
+
+And then this is just a little snippets of some code. The code base is quite large. There were numerous errors. We don't know exactly where the errors start and end, but it works decently. But yeah, the errors are definitely going to cause issues with the later analysis, as likely we don't really exactly know how these errors affected it. So we'll kind of see that here in a second.
+
+8. Empirical Results and Statistical Analysis
+
+Now for some stats. OK, so doing statistics, we had 15 of the lobster data sets. And we compared the Almgren-Chris model with the Almgren-Chris plus the Heston model, so the complete model. And so for the first tests we did, we did a paired t-test and then the Wilcoxon Signed-rank test. What these are telling us are, if we look at every single individual trade in each of the 15 data sets, is there any difference between how each one performs for all of them? And these did not have statistically significant p values, which indicates that the added complexity did not have a significant cost advantage on all of these average ISs.
+
+And if we look at the across data set paired t-test, this is looking at just if we take the average, the end result of each of the 15 trades and compare them, this also does not have a statistically better result.
+
+However, we did break it down into different volatility buckets with the regime analysis. And we see that the Heston model performed much better at low volatilities than at the medium and high volatilities. And this is the Levine variance test. The Heston model had massive variance because it was taking so much more risk. And the Almgren-Chris model was just performing much safer bets. So at the lower volatilities, the Heston model was making more risk, but there was less —Change in volatility. Volatility evolved.
+
+But at the really high volatilities when it was taking all these big risks, there was a lot more money that it could be losing. And then we did a two-sample KS test, which says that these do have statistically different results and these models do work.
+
+And then, OK, I didn't find the model, was the Sharpe reliability comparison. And this was statistically significant. And this is implying that the Heston model will perform much better in more stable markets. And as volatility increases, the safer Almgren-Chris model will take less risks and this will reduce losses.
+
+So the interpretation for all of these is that the Heston model will perform better in low volatility environments as it will take more risk and has a much higher variance. So in high volatility environments, the Almgren-Chris model will perform better.
+
+9. Conclusions and Areas for Improvement
+
+So there's a lot of areas to continue. This is kind of a general idea of how do I optimally liquidate a lot of stocks. And so you can imagine, we could sit here from the beginning of this final period and not get to the end of just generating things we could fix. So we're going to keep these six bullet points pretty brief.
+
+First, we messed up. Fixing that would be really helpful, I think. And then secondly, our solutions for that 0th order J and that first order J were both dependent on ansatzes, which are basically justified guesses in math. We're like, OK, if we're at all right, it has to have this form. And then we solve for the smaller term. We could be wrong.
+
+Yeah, there's infinite code errors that could be potentially looked at, debug, optimizations that could occur. We tried to parallelize a bunch of this. If it wasn't parallelized, it would have taken a lot more time. But yeah, there's still infinite things that could be looked at in the code base.
+
+I think intuitively, though, our output kind of makes sense. Because essentially, we took the pre-existing model and did a Taylor expansion of it. And it is accurate to the degree to which it is local to the original model. So I think pretty much the way we went about addressing the problem gave us some limits. But we're seeing those limits are the degree to which we are limited. We could have probably gotten a little further outside of that box if we'd taken a different route.
+
+Plus yada yada. You can read it if you haven't already.
+
+All right, thank you very much.
+
+[Applause]
