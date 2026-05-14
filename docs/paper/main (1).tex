@@ -1,0 +1,1524 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{titlesec}
+\usepackage{setspace}
+\usepackage{xcolor}
+\usepackage{mathrsfs}
+\usepackage{biblatex}
+
+\addbibresource{references.bib}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+\setstretch{1.15}
+
+\titleformat{\section}
+{\large\bfseries}
+{\thesection.}{0.5em}{}
+
+\titleformat{\subsection}
+{\normalsize\bfseries}
+{\thesubsection}{0.5em}{}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+
+\title{Optimal Execution Under Stochastic Volatility:\\
+From Almgren--Chriss to the Heston Framework}
+
+\author{Nathan Hoehndorf, Milo Glennon, Ben Guevel, Nathan Hess, Danielle Spahr}
+\date{May 13th, 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{center}
+\textit{A Derivation of Dynamic Trading Strategies via Hamilton--Jacobi--Bellman Theory and Asymptotic Expansion}
+\end{center}
+
+\vspace{1em}
+
+\begin{abstract}
+We study the problem of optimal portfolio liquidation under market impact. Beginning with the classical Almgren--Chriss (AC) framework, we derive the static optimal trading trajectory via a discrete calculus of variations approach. We then identify the principal limitation of the AC model---its assumption of constant volatility---and extend the framework by coupling the asset price dynamics to a Heston stochastic volatility process. The resulting control problem is analyzed through the Hamilton--Jacobi--Bellman (HJB) partial differential equation. Because the HJB equation has no closed-form solution in the fully coupled system, we apply an asymptotic perturbation expansion in the volatility-of-volatility parameter $\xi$, recovering an analytically tractable, volatility-adjusted optimal trading rate. We conclude with a description of the Monte Carlo simulation architecture used to compare the two frameworks empirically.
+\end{abstract}
+
+\section{Introduction and the Fundamental Trade-off}
+
+Consider a trader who begins the day holding a large inventory $X$ of a single asset and must fully liquidate it by a fixed deadline $T$. Selling the entire position, or amount of inventory, at once is almost never feasible: the market's limit order book (LOB) is a snapshot of liquidity, showing all bids and asks, organized by price. The LOB can only absorb so many shares at the prevailing bid price before prices begin to deteriorate. The trader is therefore forced to break the liquidation into smaller tranches, or a specified portion of a trade, executed over time.
+
+This creates a fundamental tension. Trading \emph{slowly} reduces the cost of market impact---each slice is small enough that the book absorbs it with minimal price depression---but exposes the remaining inventory to prolonged market risk: the asset price may fall while shares are still held. Trading \emph{quickly} eliminates that exposure but hammers the price, extracting poor execution. The goal of optimal execution theory is to find the trajectory $\{n_t\}_{0 \le t \le T}$ that navigates this trade-off optimally.
+
+The Almgren--Chriss (AC) model, introduced in a seminal 2001 paper by Robert Almgren and Neil Chriss , was the first to provide a tractable analytical solution to this problem using a mean-variance objective. It remains the industry standard starting point and serves as the baseline for the more sophisticated model developed here \cite{almgren2001optimal}.
+
+The primary deficiency of the AC framework is its assumption that asset volatility $\sigma^2$ is a fixed constant throughout the entire liquidation window. Real volatility is anything but constant: it spikes on earnings announcements, mean-reverts during calm periods, and is itself a stochastic process \cite{engle1982arch}. A static, pre-planned schedule derived under the assumption of constant volatility cannot optimally adapt to this reality. The natural remedy is to replace constant volatility with some dynamic equations. We think of volatility as generally remaining pretty stable, with shocks that will deviate away from the mean. The volatility then lowers down to the mean by way of traders calming down after an event. The Heston stochastic volatility model captures these dynamics, which is precisely what the present work develops \cite{heston1993closed}.
+
+\section{The Static Almgren--Chriss Framework} 
+
+\subsection{System Dynamics}
+
+We model the liquidation of $X$ shares over a horizon $[0, T]$ subdivided into $N$ intervals of length $\tau = T/N$. Let $x_k$ denote the inventory at the start of period $k$, so $x_0 = X$ and $x_N = 0$. At each step, the trader submits an order of size
+\[
+n_k = x_{k-1} - x_k.
+\]
+The trading velocity (shares per unit time) is
+\[
+v_k = \frac{n_k}{\tau}.
+\]
+
+The fundamental mid-price evolves as
+\[
+S_k = S_{k-1} - \gamma v_k \tau + \sigma\sqrt{\tau}\,\varepsilon_k,
+\]
+where $\varepsilon_k \overset{\text{iid}}{\sim} (0,1)$, $\sigma > 0$ is the asset's volatility, and $\gamma > 0$ is the permanent market impact parameter.
+
+The realized execution price includes an additional temporary impact penalty:
+\[
+\tilde{S}_k = S_{k-1} - \eta v_k,
+\]
+where $\eta > 0$ is the temporary impact parameter.
+
+\begin{remark}[Two Types of Market Impact]
+\emph{Permanent impact} represents a shift in market belief about fair value caused by the information content or sheer size of the trade. \emph{Temporary impact} is the transient cost of consuming available liquidity; once the trade is complete and the order book refills, the price reverts.
+\end{remark}
+
+\subsection{Implementation Shortfall}
+
+The implementation shortfall (IS) is defined as
+\[
+\text{IS} = X S_0 - \sum_{k=1}^{N} n_k \tilde{S}_k.
+\]
+
+\cite{perold1988implementation}
+
+\subsection{Expected Implementation Shortfall}
+
+\begin{proposition}[Expected IS]
+Under the linear impact model,
+\[
+\mathbb{E}[\text{IS}] = \sum_{k=1}^{N} \frac{\eta n_k^2}{\tau} + \frac{1}{2}\gamma X^2.
+\]
+\end{proposition}
+
+\begin{proof}
+Substitute the capture price into the IS definition:
+\[
+\text{IS} = XS_0 - \sum_{k=1}^N n_k\tilde{S}_k
+= XS_0 - \sum_{k=1}^N n_k S_{k-1} + \eta\sum_{k=1}^N \frac{n_k^2}{\tau}.
+\]
+Expand the mid-price telescopically:
+\[
+S_{k-1} = S_0 + \sum_{j=1}^{k-1}\bigl(\sigma\sqrt{\tau}\,\varepsilon_j - \gamma n_j\bigr).
+\]
+After substitution and cancellation with the $XS_0$ term,
+\[
+\text{IS} = \sum_{k=1}^N n_k \sum_{j=1}^{k-1} \gamma n_j
+- \sum_{k=1}^N n_k \sum_{j=1}^{k-1}\sigma\sqrt{\tau}\,\varepsilon_j
++ \eta\sum_{k=1}^N\frac{n_k^2}{\tau}.
+\]
+Taking expectations eliminates the noise term. The permanent impact term telescopes to
+\[
+\frac{\gamma}{2}(X^2 - 0) = \frac{1}{2}\gamma X^2.
+\]
+\end{proof}
+
+\subsection{Variance of Implementation Shortfall}
+
+\begin{proposition}[Variance of IS]
+\[
+\mathrm{Var}[\mathrm{IS}] = \sigma^2 \sum_{k=1}^{N} \tau x_k^2.
+\]
+\end{proposition}
+
+\begin{proof}
+Only the stochastic component contributes to variance:
+\[
+Z = -\sigma\sqrt{\tau}\sum_{j=1}^N x_{j-1}\varepsilon_j.
+\]
+Using independence of the $\varepsilon_j$,
+\[
+\mathrm{Var}[\mathrm{IS}] = \sigma^2\tau\sum_{j=1}^N x_{j-1}^2.
+\]
+\end{proof}
+
+\subsection{The Mean--Variance Objective and Euler--Lagrange Conditions}
+
+A trader with risk-aversion parameter $\lambda > 0$ minimizes
+\[
+U = \mathbb{E}[\text{IS}] + \lambda\,\mathrm{Var}[\text{IS}]
+= \sum_{k=1}^N\left(\frac{\eta n_k^2}{\tau} + \lambda\sigma^2\tau x_k^2\right) + \text{const}.
+\]
+
+The Euler--Lagrange condition becomes
+\[
+\eta\bigl(x_{k+1} - 2x_k + x_{k-1}\bigr)
+= \lambda\sigma^2\tau^2 x_k.
+\]
+
+\begin{remark}[A Discrete Equation of Motion]
+The left-hand side is the discrete analogue of the second derivative of the inventory trajectory.
+\end{remark}
+
+\subsection{The Optimal Static Trajectory}
+
+\begin{theorem}[Almgren--Chriss Optimal Inventory]
+Define
+\[
+\kappa = \sqrt{\frac{\lambda\sigma^2}{\eta}}.
+\]
+The unique solution satisfying $x_0 = X$ and $x_N = 0$ is
+\[
+\boxed{
+ x_k = \frac{\sinh\bigl(\kappa(T-t_k)\bigr)}{\sinh(\kappa T)}X
+}.
+\]
+\end{theorem}
+
+\begin{proof}
+Rewrite the difference equation as
+\[
+x_{k+1} - \bigl(2 + \kappa^2\tau^2\bigr)x_k + x_{k-1} = 0.
+\]
+Using the ansatz $x_k = r^k$ yields the characteristic equation
+\[
+r^2 - (2+\kappa^2\tau^2)r + 1 = 0.
+\]
+The resulting hyperbolic-form solution satisfying the boundary conditions is
+\[
+x_k = \frac{\sinh\bigl(\kappa(T-t_k)\bigr)}{\sinh(\kappa T)}X.
+\]
+\end{proof}
+
+The continuous-time optimal trading rate is
+\[
+n_t^{(\mathrm{AC})} = -\dot{x}_t
+= \kappa\frac{\cosh(\kappa(T-t))}{\sinh(\kappa T)}X.
+\]
+
+\section{Introducing Stochastic Volatility: A Four-State Formulation}
+
+\subsection{Motivation}
+
+The classical Almgren--Chriss framework assumes constant volatility and therefore produces a deterministic liquidation trajectory fixed at time $t=0$. Real markets exhibit stochastic volatility clustering, leverage effects, and regime-dependent execution risk \cite{engle1982arch} \cite{black1976studies}. To incorporate these effects dynamically, we extend the state space to include both the underlying asset price and a stochastic variance process.
+
+The resulting control problem now evolves over the four-dimensional state vector
+\[
+(t,x,S,v),
+\]
+where:
+\begin{itemize}
+\item $t$ is time,
+\item $x_t$ is remaining inventory,
+\item $S_t$ is the mid-price,
+\item $v_t$ is instantaneous variance.
+\end{itemize}
+
+\subsection{The Controlled Heston Dynamics}
+
+\begin{definition}[Four-State Controlled System]
+The controlled dynamics are given by:
+
+\textbf{Inventory process}
+\[
+dx_t = -n_t\,dt.
+\]
+
+\textbf{Asset price process}
+\[
+dS_t = -\gamma n_t\,dt + \sqrt{v_t}\,dW_t^S.
+\]
+
+\textbf{Variance process}
+\[
+dv_t = \theta(\omega-v_t)dt + \xi\sqrt{v_t}\,dW_t^v.
+\]
+
+The Brownian motions satisfy
+\[
+dW_t^S dW_t^v = \rho\,dt.
+\]
+\end{definition}
+
+The execution price remains
+\[
+\tilde S_t = S_t - \eta n_t.
+\]
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Symbol & Name & Interpretation \\
+\midrule
+$X$ & Initial inventory & Shares to liquidate \\
+$T$ & Trading horizon & Final liquidation deadline \\
+$\gamma$ & Permanent impact & Long-run price depression \\
+$\eta$ & Temporary impact & Instantaneous liquidity cost \\
+$\lambda$ & Risk aversion & Inventory risk penalty \\
+$\omega$ & Long-run variance & Mean reversion level \\
+$\theta$ & Mean reversion speed & Variance pullback intensity \\
+$\xi$ & Vol-of-vol & Variance diffusion strength \\
+$\rho$ & Leverage effect & Price-volatility correlation \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Dynamic Optimization and the HJB Equation}
+
+\subsection{The Dynamic Value Function}
+
+The trader minimizes expected total remaining execution cost plus inventory risk \cite{oksendal2003sde}:
+\[
+J(t,x,S,v)
+=
+\inf_{\{n_s\}_{s\ge t}}
+\mathbb E_{t,x,S,v}
+\left[
+\int_t^T
+\left(
+\eta n_s^2
++
+\lambda v_s x_s^2
+\right)ds
+-
+X_TS_T
+\right].
+\]
+
+Because the asset price enters linearly through liquidation value, it is natural to separate the mark-to-market contribution from the nonlinear control component.
+
+We therefore introduce the decomposition
+\[
+J(t,x,S,v)
+=
+-xS + \Phi(t,x,v).
+\]
+
+The term $-xS$ represents the marked-to-market value of the remaining inventory, while $\Phi$ captures the nonlinear execution-risk correction.
+
+\subsection{Bellman's Principle}
+
+Bellman's principle \cite{fleming2006controlled} implies
+\[
+0
+=
+\inf_n
+\left\{
+\eta n^2dt
++
+\lambda v x^2dt
++
+\mathbb E[dJ]
+\right\}.
+\],
+
+or that we will continue to act optimally in all future time steps. We now compute $dJ$ explicitly under the four-state dynamics.
+
+\subsection{Multivariate It\^o Expansion}
+
+Applying multivariate It\^o calculus to $J(t,x,S,v)$ gives \cite{karatzas1998brownian}
+
+\begin{align*}
+dJ
+&=
+J_tdt
++
+J_xdx
++
+J_SdS
++
+J_vdv
+\\
+&\quad
++
+\frac12J_{xx}(dx)^2
++
+\frac12J_{SS}(dS)^2
++
+\frac12J_{vv}(dv)^2
+\\
+&\quad
++
+J_{xS}dx\,dS
++
+J_{xv}dx\,dv
++
+J_{Sv}dS\,dv.
+\end{align*}
+
+Since $dx_t=-n_tdt$ is finite variation,
+\[
+(dx_t)^2 = dx_t dS_t = dx_t dv_t = 0.
+\]
+
+The nontrivial quadratic variations are
+\[
+(dS_t)^2 = v_tdt,
+\]
+\[
+(dv_t)^2 = \xi^2v_tdt,
+\]
+\[
+dS_tdv_t
+=
+\rho\xi v_tdt.
+\]
+
+Substituting these system dynamics and quadratic variations yields
+\begin{align*}
+dJ
+&=
+J_tdt
+-
+nJ_xdt
++
+J_S\left(-\gamma n dt + \sqrt v dW_t^S\right)
+\\
+&\quad
++
+J_v\left(\theta(\omega-v)dt + \xi\sqrt v dW_t^v\right)
+\\
+&\quad
++
+\frac12vJ_{SS}dt
++
+\frac12\xi^2vJ_{vv}dt
++
+\rho\xi vJ_{Sv}dt
+\\
+&\quad
++
+\text{martingale terms}.
+\end{align*}
+
+Taking expectations eliminates the martingale components:
+\begin{align*}
+\frac{\mathbb E[dJ]}{dt}
+&=
+J_t
+-
+nJ_x
+-
+\gamma nJ_S
++
+\theta(\omega-v)J_v
+\\
+&\quad
++
+\frac12vJ_{SS}
++
+\frac12\xi^2vJ_{vv}
++
+\rho\xi vJ_{Sv}.
+\end{align*}
+
+\subsection{The Hamiltonian}
+
+Substituting into Bellman's principle gives
+\begin{align*}
+0
+=
+\inf_n
+\Bigg\{
+&\eta n^2
++
+\lambda vx^2
++
+J_t
+-
+nJ_x
+-
+\gamma nJ_S
+\\
+&+
+\theta(\omega-v)J_v
++
+\frac12vJ_{SS}
++
+\frac12\xi^2vJ_{vv}
++
+\rho\xi vJ_{Sv}
+\Bigg\}.
+\end{align*}
+
+The Hamiltonian in $n$ is quadratic:
+\[
+\mathcal H(n)
+=
+\eta n^2
+-
+n(J_x+\gamma J_S).
+\]
+
+The first-order condition is
+\[
+\frac{\partial\mathcal H}{\partial n}
+=
+2\eta n-(J_x+\gamma J_S)=0.
+\]
+
+Hence the optimal feedback control is
+\[
+\boxed{
+ n_t^*
+ =
+ \frac{1}{2\eta}
+ \left(J_x+\gamma J_S\right)
+ }.
+\]
+
+Substituting the optimizer back into the HJB yields
+\begin{theorem}[Four-State HJB Equation]
+The value function satisfies \cite{fleming2006controlled}
+\[
+\boxed{
+\begin{aligned}
+0
+&=
+J_t
++
+\lambda vx^2
++
+\theta(\omega-v)J_v
++
+\frac12vJ_{SS}
+\\
+&\quad
++
+\frac12\xi^2vJ_{vv}
++
+\rho\xi vJ_{Sv}
+-
+\frac{1}{4\eta}(J_x+\gamma J_S)^2.
+\end{aligned}
+}
+\]
+with terminal condition
+\[
+J(T,x,S,v)=-xS.
+\]
+\end{theorem}
+
+\section{Quadratic Ansatz and Asymptotic Perturbation Expansion}
+
+\subsection{Reduction via the Mark-to-Market Decomposition}
+
+Using the decomposition
+\[
+J(t,x,S,v)=-xS+\Phi(t,x,v),
+\]
+
+\cite{fouque2011multiscale}
+
+we compute
+\[
+J_S=-x,
+\qquad
+J_{SS}=0,
+\qquad
+J_{Sv}=0.
+\]
+
+The HJB becomes
+\[
+0
+=
+\Phi_t
++
+\lambda vx^2
++
+\theta(\omega-v)\Phi_v
++
+\frac12\xi^2v\Phi_{vv}
+-
+\frac{1}{4\eta}(\Phi_x-\gamma x)^2.
+\]
+
+We now expand in powers of the volatility-of-volatility parameter $\xi$:
+\[
+\Phi
+=
+\Phi^{(0)}
++
+\xi\Phi^{(1)}
++
+O(\xi^2).
+\]
+
+\subsection{Zeroth-Order Equation}
+
+At order $O(1)$,
+\[
+0
+=
+\Phi_t^{(0)}
++
+\lambda vx^2
++
+\theta(\omega-v)\Phi_v^{(0)}
+-
+\frac{1}{4\eta}
+\left(
+\Phi_x^{(0)}-\gamma x
+\right)^2.
+\]
+
+We adopt the quadratic ansatz
+\[
+\boxed{
+J^{(0)}(t,x,S,v)
+=
+-xS
++
+\frac12\gamma x^2
++
+h(t,v)x^2
+}.
+\]
+
+Then
+\[
+\Phi_x^{(0)}
+=
+\gamma x + 2h(t,v)x.
+\]
+
+Therefore,
+\[
+\Phi_x^{(0)}-\gamma x
+=
+2h(t,v)x.
+\]
+
+Substituting into the HJB and dividing by $x^2$ gives
+\[
+0
+=
+h_t
++
+\theta(\omega-v)h_v
++
+\lambda v
+-
+\frac{h^2}{\eta}.
+\]
+
+This is a nonlinear Riccati-type PDE.
+
+\subsection{Recovery of the Almgren--Chriss Solution}
+
+If volatility is constant so that
+\[
+v_t \equiv \sigma^2,
+\]
+and stochastic volatility effects vanish, then $h_v=0$ and the equation reduces to the classical Riccati ODE
+\[
+\boxed{
+ h_t
+ +
+ \lambda\sigma^2
+ -
+ \frac{h^2}{\eta}
+ =0
+ }.
+\]
+
+With terminal blow-up condition corresponding to complete liquidation,
+\[
+h(T)=+\infty,
+\]
+the solution is
+\[
+\boxed{
+ h(t)
+ =
+ \sqrt{\eta\lambda\sigma^2}
+ \,
+ \coth
+ \left(
+ \sqrt{\frac{\lambda\sigma^2}{\eta}}
+ (T-t)
+ \right)
+ }.
+\]
+
+Defining
+\[
+\kappa
+=
+\sqrt{\frac{\lambda\sigma^2}{\eta}},
+\]
+we recover
+\[
+h(t)=\eta\kappa\coth(\kappa(T-t)).
+\]
+
+The optimal control becomes
+\begin{align*}
+n_t^{(0)}
+&=
+\frac{1}{2\eta}
+\left(J_x^{(0)}+\gamma J_S^{(0)}\right)
+\\
+&=
+\frac{1}{2\eta}
+\left(-S+\gamma x+2hx-\gamma x\right)
+\\
+&=
+\frac{h}{\eta}x.
+\end{align*}
+
+Hence
+\[
+\boxed{
+ n_t^{(0)}
+ =
+ \kappa
+ \coth(\kappa(T-t))x_t
+ }
+\]
+which is precisely the continuous-time Almgren--Chriss liquidation rate.
+
+\section{First-Order Correction and the Feynman--Kac Representation}
+
+\subsection{First-Order Equation}
+
+Collecting terms of order $O(\xi)$ gives
+\[
+0
+=
+\Phi_t^{(1)}
++
+\theta(\omega-v)\Phi_v^{(1)}
+-
+\frac{h}{\eta}x\Phi_x^{(1)}.
+\]
+
+At order $O(\xi^2)$ the diffusion operator appears explicitly:
+\[
+\mathcal Lf
+=
+\theta(\omega-v)f_v
++
+\frac12v f_{SS}
++
+\frac12\xi^2vf_{vv}
++
+\rho\xi vf_{Sv}.
+\]
+
+Because the mark-to-market decomposition eliminates the pure $S$ dependence, the effective generator acting on the correction becomes
+\[
+\boxed{
+\mathcal L^{(v)}f
+=
+\theta(\omega-v)f_v
++
+\frac12\xi^2vf_{vv}
+}.
+\]
+
+The first-order correction equation may therefore be written compactly as
+\[
+\left(\partial_t + \mathcal L^{(v)}\right)\Phi^{(1)}
+-
+\frac{h}{\eta}x\Phi_x^{(1)}
+=
+-\rho vxh_v.
+\]
+
+\subsection{Feynman--Kac Representation}
+
+The PDE is linear in $\Phi^{(1)}$, so the infinitesimal generator permits a Feynman--Kac representation \cite{karatzas1998brownian}.
+
+Let the characteristic inventory dynamics evolve according to the zeroth-order strategy:
+\[
+dx_s
+=
+-
+\frac{h(s,v_s)}{\eta}x_sds.
+\]
+
+Then \cite{karatzas1998brownian}
+\[
+\boxed{
+\Phi^{(1)}(t,x,v)
+=
+\mathbb E_{t,x,v}
+\left[
+\int_t^T
+\rho v_sx_sh_v(s,v_s)
+\,ds
+\right].
+}
+\]
+
+Using the zeroth-order approximation
+\[
+v_s \approx v_t,
+\]
+and the Almgren--Chriss inventory trajectory
+\[
+x_s
+=
+ x_t
+ \frac{\sinh(\kappa(T-s))}{\sinh(\kappa(T-t))},
+\]
+we obtain
+\[
+\Phi^{(1)}
+\approx
+\rho v_tx_th_v
+\int_t^T
+\frac{\sinh(\kappa(T-s))}{\sinh(\kappa(T-t))}
+\,ds.
+\]
+
+The integral evaluates to
+\[
+\int_t^T
+\frac{\sinh(\kappa(T-s))}{\sinh(\kappa(T-t))}
+\,ds
+=
+\frac{1}{\kappa}
+\tanh\left(\frac{\kappa(T-t)}{2}\right).
+\]
+
+Hence
+\[
+\boxed{
+\Phi^{(1)}
+\approx
+\frac{\rho v_tx_th_v}{\kappa}
+\tanh\left(\frac{\kappa(T-t)}{2}\right)
+}.
+\]
+
+\section{Volatility-Adjusted Optimal Trading Rate}
+
+The optimal feedback control is
+\[
+n_t^*
+=
+\frac{1}{2\eta}
+\left(J_x+\gamma J_S\right).
+\]
+
+Using
+\[
+J
+=
+J^{(0)} + \xi J^{(1)} + O(\xi^2),
+\]
+we obtain
+\[
+ n_t^*
+ =
+ n_t^{(0)}
+ +
+ \frac{\xi}{2\eta}J_x^{(1)}
+ +
+ O(\xi^2).
+\]
+
+Differentiating the first-order correction yields the volatility-adjusted execution rate:
+\[
+\boxed{
+ n_t^*
+ \approx
+ \kappa
+ \coth(\kappa(T-t))x_t
+ -
+ \frac{\xi\rho v_th_v}{2\eta\kappa}
+ \tanh\left(\frac{\kappa(T-t)}{2}\right)
+ }.
+\]
+
+\begin{remark}[Interpretation of the Correction]
+The first term is the classical Almgren--Chriss liquidation speed. The second term dynamically adjusts execution according to the stochastic volatility state.
+
+\begin{itemize}
+\item If $\rho<0$ (the standard equity leverage effect), rising volatility slows liquidation.
+\item If $\rho>0$, volatility shocks accelerate liquidation.
+\item The correction becomes strongest near the middle of the trading horizon where inventory exposure and variance uncertainty jointly dominate.
+\end{itemize}
+\end{remark}
+
+\section{Computational Architecture}
+
+The framework investigates whether stochastic-volatility market dynamics improve execution outcomes relative to classical diffusion models.
+
+The statistical suite includes:
+\begin{itemize}
+\item paired t-tests,
+\item Wilcoxon signed-rank tests,
+\item Levene variance tests,
+\item Kolmogorov--Smirnov distribution tests,
+\item Conditional Value-at-Risk (CVaR) analysis,
+\item volatility-regime analysis,
+\item leverage-correlation sensitivity analysis.
+\end{itemize}
+
+The paired t-test evaluates whether
+\[
+\mathbb E[IS_{AC}-IS_{Heston}] > 0,
+\]
+corresponding to lower average implementation shortfall under the Heston environment.
+
+The framework additionally evaluates whether stochastic volatility reduces implementation-shortfall variance and tail risk.
+
+CVaR statistics are computed at confidence levels such as 95\% and 99\% \cite{rockafellar2000cvar}, with bootstrap procedures \cite{efron1993bootstrap} used to estimate confidence intervals and p-values for tail-risk reduction.
+
+If volatility-regime metrics are available, simulations are partitioned into low-, medium-, and high-volatility regimes, with within-regime paired tests applied to determine whether stochastic-volatility benefits are regime dependent.
+
+Optional sweeps over the leverage parameter $\rho$ are also supported. These experiments measure the sensitivity of execution performance and tail risk to return--variance correlation.
+
+The repository additionally generates diagnostic visualizations, including:
+\begin{itemize}
+\item implementation shortfall histograms,
+\item paired-difference distributions,
+\item CVaR comparison plots,
+\item volatility-regime summaries,
+\item leverage-sensitivity visualizations.
+\end{itemize}
+
+\section{Dataset Sweep Experiments}
+
+The framework supports automated evaluation across all available LOBSTER datasets \cite{huang2011lobster}.
+
+For each dataset, the repository:
+\begin{enumerate}
+\item calibrates market and volatility parameters,
+\item constructs the Almgren--Chriss execution strategy,
+\item performs paired Monte Carlo simulations,
+\item records execution and risk statistics.
+\end{enumerate}
+
+Reported quantities include:
+\begin{itemize}
+\item mean implementation shortfall,
+\item implementation shortfall variance,
+\item reliability ratio,
+\item estimated leverage correlation $\rho$.
+\end{itemize}
+
+Cross-dataset paired t-tests are then used to compare execution quality and reliability across calibrated market environments.
+
+\section{Overall Statistical Objective}
+
+The computational framework is designed to evaluate several central research questions:
+\begin{enumerate}
+\item Does stochastic volatility reduce expected implementation shortfall?
+\item Does stochastic volatility improve execution reliability?
+\item Does stochastic volatility reduce tail risk?
+\item Are performance gains regime dependent?
+\item How does leverage correlation affect execution quality?
+\end{enumerate}
+
+By combining stochastic-control theory, empirical calibration, Monte Carlo simulation, and paired statistical testing, the framework provides a unified environment for studying optimal execution under dynamically evolving market volatility.
+
+\section{Empirical Results}
+
+The following results were obtained by running the full simulation and statistical suite against calibrated LOBSTER limit-order-book data for five equities (Apple, Amazon, Google, Intel, Microsoft).
+
+\subsection{Within-Dataset Paired Tests}
+
+\paragraph{Paired $t$-test (IS comparison).}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Quantity & Value \\
+\midrule
+$t$-statistic & $-1.5880$ \\
+$p$-value (one-sided) & $0.9438$ \\
+Reject $H_0$ & No \\
+\bottomrule
+\end{tabular}
+\end{center}
+The null hypothesis $H_0: \mathbb{E}[IS_{AC}] \ge \mathbb{E}[IS_{\text{Heston}}]$ is not rejected. The additional complexity of the Heston model does not yield a statistically significant average IS advantage.
+
+\paragraph{Wilcoxon Signed-Rank Test.}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Quantity & Value \\
+\midrule
+$p$-value (one-sided) & $0.9787$ \\
+Reject $H_0$ & No \\
+\bottomrule
+\end{tabular}
+\end{center}
+The nonparametric test corroborates the $t$-test: there is no significant median IS improvement under the Heston strategy.
+
+\subsection{Across-Dataset Paired $t$-Test}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Quantity & Value \\
+\midrule
+Valid datasets & 15 \\
+$t$-statistic & $-1.1828$ \\
+$p$-value (one-sided) & $0.8717$ \\
+Heston has lower mean IS & No \\
+\bottomrule
+\end{tabular}
+\end{center}
+Aggregating across all calibrated datasets, the Heston model does not achieve statistically lower IS on average, implying no systematic execution advantage under general market conditions.
+
+\subsection{Volatility-Regime Analysis}
+
+Simulations were partitioned into three volatility regimes by realized variance:
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Regime & Vol.\ range & Median IS diff.\ (Heston $-$ AC) & $p$-value (Reject $H_0$?) \\
+\midrule
+Low & $[0.107,\; 0.190]$, $n=3333$ & $+32{,}660{,}353.42$ & $0.0000$ (\textbf{Yes}) \\
+Mid & $[0.190,\; 0.221]$, $n=3333$ & $-284{,}291.68$ & $0.2141$ (No) \\
+High & $[0.221,\; 0.381]$, $n=3333$ & $-44{,}922{,}694.11$ & $1.0000$ (No) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+In the low-volatility regime the Heston model produces significantly \emph{higher} IS than AC ($p \approx 0$), while differences in the mid- and high-volatility regimes are not statistically significant. This suggests that stochastic-volatility benefits are strongly regime dependent and may not materialize in turbulent markets.
+
+\subsection{Distribution Tests}
+
+\paragraph{Levene Variance Test.}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Quantity & Value \\
+\midrule
+Levene statistic & $17{,}124.09$ \\
+$p$-value (one-sided) & $1.0000$ \\
+Reject $H_0$ & No \\
+\bottomrule
+\end{tabular}
+\end{center}
+The null hypothesis of equal IS variance between the two models is not rejected; the AC model is therefore not characterized as riskier in terms of IS dispersion.
+
+\paragraph{Two-Sample Kolmogorov--Smirnov Test.}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Quantity & Value \\
+\midrule
+KS statistic & $0.5071$ \\
+$p$-value (two-sided) & $0.0000$ \\
+Reject $H_0$ & \textbf{Yes} \\
+\bottomrule
+\end{tabular}
+\end{center}
+Despite the absence of a mean difference, the IS distributions of the two models are statistically distinguishable ($D = 0.507$), confirming that the models are not interchangeable and produce fundamentally different execution-cost profiles.
+
+\subsection{Sharpe-Like Reliability Comparison}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Quantity & Value \\
+\midrule
+Valid datasets & 15 \\
+Mean Sharpe$_{\mathrm{AC}}$ & $-46{,}455.48$ \\
+Mean Sharpe$_{\mathrm{Heston}}$ & $-2{,}138.87$ \\
+$t$-statistic & $2.8762$ \\
+$p$-value (one-sided) & $0.0061$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The Heston model yields a significantly better Sharpe-like reliability ratio ($p = 0.006$), indicating substantially more consistent execution quality relative to its own variance. This result is consistent with the interpretation that the Heston strategy performs markedly better in stable market conditions, while the conservative AC schedule limits downside exposure as volatility rises.
+
+\appendix
+
+\section{Euler--Maruyama Discretization and Numerical Stability}
+\label{app:euler}
+
+\subsection{Full Discretization Scheme}
+
+Let $\tau = T/N$ be the time step. Given correlated increments $\Delta W_k^S$ and $\Delta W_k^v$ (constructed via the Cholesky procedure in Appendix~\ref{app:cholesky}), the full Euler--Maruyama update \cite{kloeden1992numerical} is:
+
+\paragraph{Inventory.}
+\[
+x_k = x_{k-1} - n_k \tau.
+\]
+
+\paragraph{Asset price.}
+\[
+S_k = S_{k-1} - \gamma n_k\tau - \eta(n_k - n_{k-1}) + \sqrt{v_{k-1}}\,\Delta W_k^S.
+\]
+
+\paragraph{Variance.}
+\[
+v_k = v_{k-1} + \theta(\omega - v_{k-1})\tau + \xi\sqrt{v_{k-1}}\,\Delta W_k^v.
+\]
+
+The trading rate $n_k$ is computed from the feedback law:
+\[
+n_k
+=
+\kappa \coth\!\bigl(\kappa(T-t_{k-1})\bigr)\,x_{k-1}
+-
+\frac{\xi\rho v_{k-1} h_v(t_{k-1}, v_{k-1})}{2\eta\kappa}
+\tanh\!\left(\frac{\kappa(T-t_{k-1})}{2}\right).
+\]
+
+\subsection{The Feller Condition}
+
+The variance process $v_t$ follows a Cox--Ingersoll--Ross (CIR) dynamics. In continuous time, $v_t$ is guaranteed to remain strictly positive if and only if the \emph{Feller condition} \cite{cox1985theory} holds:
+\[
+\boxed{2\theta\omega \geq \xi^2.}
+\]
+When this condition is satisfied, the drift $\theta(\omega - v_t)$ pushes the process away from zero sufficiently strongly to overcome the diffusion. In practice, the Euler--Maruyama scheme does not respect this boundary even when the condition holds analytically. Two standard remedies are used:
+
+\begin{enumerate}[label=(\roman*)]
+\item \textbf{Absorption:} Set $v_k \leftarrow \max(v_k, 0)$ after each step. \cite{glasserman2004monte}
+\item \textbf{Reflection:} Set $v_k \leftarrow |v_k|$ after each step. \cite{glasserman2004monte}
+\end{enumerate}
+
+Absorption is the more conservative choice and was used in this implementation. Note that absorption introduces a small downward bias in simulated volatility; this effect is negligible when $2\theta\omega \gg \xi^2$ but can be material near the boundary.
+
+\subsection{Path Validity and Filtering}
+
+Even with variance clamping, Euler--Maruyama paths can produce numerically implausible outcomes when parameters are poorly calibrated or when rare large draws accumulate. A path $\omega$ is flagged as invalid and removed from paired comparisons if any of the following criteria are triggered:
+
+\begin{itemize}
+\item $S_k < 0$ for any $k$ (negative price),
+\item $v_k > v_{\max}$ for a user-specified ceiling $v_{\max}$ (explosive variance),
+\item $|IS| > IS_{\max}$ for a user-specified ceiling $IS_{\max}$ (numerically degenerate shortfall),
+\item $x_N \neq 0$ to within a tolerance $\varepsilon$ (incomplete liquidation due to numerical drift).
+\end{itemize}
+
+Paths are removed \emph{symmetrically}: if the AC path for simulation $i$ is valid but the Heston path is not (or vice versa), both are discarded so that the paired structure of the test is preserved. This symmetric filtering is the source of the reduced sample counts seen in the regime analysis (Section~10.3).
+
+\subsection{Step-Size Guidance}
+
+Euler--Maruyama convergence is first-order in $\tau$ for the strong error and second-order for the weak error \cite{kloeden1992numerical}. For the Heston model the step size should satisfy
+\[
+\tau \leq \frac{1}{2\theta}
+\]
+to prevent the mean-reversion term from overshooting. In practice, $N = 390$ (one step per trading minute over a 6.5-hour day) provides sufficient resolution.
+
+% -------------------------------------------------------
+\section{Cholesky Decomposition for Correlated Shocks}
+\label{app:cholesky}
+
+\subsection{Construction}
+
+The asset-price Brownian motion $W^S$ and the variance Brownian motion $W^v$ are correlated with instantaneous coefficient $\rho \in (-1, 1)$ \cite{black1976studies}. To simulate them jointly, we start from two independent standard normals $Z_1, Z_2 \overset{\text{iid}}{\sim} \mathcal{N}(0,1)$ and apply the Cholesky factorization of the correlation matrix
+\[
+\Sigma
+=
+\begin{pmatrix}
+1 & \rho \\
+\rho & 1
+\end{pmatrix}
+= LL^\top,
+\qquad
+L
+=
+\begin{pmatrix}
+1 & 0 \\
+\rho & \sqrt{1-\rho^2}
+\end{pmatrix}.
+\]
+
+The correlated increments over a step of length $\tau$ are
+\[
+\begin{pmatrix}
+\Delta W_k^S \\
+\Delta W_k^v
+\end{pmatrix}
+=
+\sqrt{\tau}\,L
+\begin{pmatrix}
+Z_1 \\
+Z_2
+\end{pmatrix}
+=
+\sqrt{\tau}
+\begin{pmatrix}
+Z_1 \\
+\rho Z_1 + \sqrt{1-\rho^2}\,Z_2
+\end{pmatrix}.
+\]
+
+One can verify:
+\[
+\mathbb{E}[(\Delta W_k^S)^2] = \tau,
+\qquad
+\mathbb{E}[(\Delta W_k^v)^2] = \tau,
+\qquad
+\mathbb{E}[\Delta W_k^S \Delta W_k^v] = \rho\tau.
+\]
+
+\subsection{Role of the Leverage Correlation}
+
+The parameter $\rho$ encodes the empirical \emph{leverage effect}: in equity markets, price declines are typically accompanied by volatility increases, giving $\rho < 0$. The sign of $\rho$ directly determines the direction of the stochastic-volatility correction to the optimal trading rate (see Section~8). Specifically:
+\begin{itemize}
+\item $\rho < 0$: a rise in $v_t$ signals increased execution risk; the first-order correction \emph{slows} liquidation to wait for calmer conditions.
+\item $\rho > 0$: rising volatility is positively correlated with price appreciation; the correction \emph{accelerates} liquidation to lock in gains.
+\item $\rho = 0$: the correction vanishes and the Heston-adjusted rate reduces to the classical AC rate.
+\end{itemize}
+
+% -------------------------------------------------------
+\section{Riccati ODE: Full Derivation and Solution}
+\label{app:riccati}
+
+\subsection{Setup}
+
+The zeroth-order HJB reduces to the Riccati ODE when $\xi = 0$ (constant volatility $v_t \equiv \sigma^2$):
+\[
+h_t + \lambda\sigma^2 - \frac{h^2}{\eta} = 0, \qquad h(T) = +\infty.
+\]
+
+The terminal condition $h(T) = +\infty$ enforces complete liquidation: as $t \to T$ with remaining inventory $x_t > 0$, the cost function must diverge to penalize any residual position.
+
+\subsection{Substitution and Solution}
+
+Introduce the substitution $h = -\eta \frac{\dot{u}}{u}$, where $\dot{u} = du/dt$. Then
+\[
+h_t = -\eta\frac{\ddot{u}u - \dot{u}^2}{u^2}, \qquad \frac{h^2}{\eta} = \frac{\eta\dot{u}^2}{u^2}.
+\]
+
+Substituting into the Riccati ODE and multiplying by $-u/\eta$:
+\[
+\ddot{u} = \kappa^2 u, \qquad \kappa^2 = \frac{\lambda\sigma^2}{\eta}.
+\]
+
+This is the linear second-order ODE with general solution
+\[
+u(t) = A e^{\kappa t} + B e^{-\kappa t}.
+\]
+
+Equivalently, $u(t) = C_1\sinh(\kappa t) + C_2\cosh(\kappa t)$. Converting back to $h = -\eta\dot{u}/u$ and imposing the terminal blow-up $h(T) = +\infty$ (equivalently, $u(T) = 0$) along with the regularity of $h$ on $[0, T)$, one obtains
+\[
+u(t) = \sinh(\kappa(T-t)).
+\]
+
+Therefore
+\[
+h(t)
+= -\eta\frac{\dot{u}}{u}
+= -\eta\frac{-\kappa\cosh(\kappa(T-t))}{\sinh(\kappa(T-t))}
+= \eta\kappa\coth(\kappa(T-t)).
+\]
+
+\subsection{Behavior Near the Terminal Time}
+
+As $t \to T^-$, using $\coth(z) \sim 1/z$ for small $z$:
+\[
+h(t) \approx \frac{\eta}{T-t} \to +\infty.
+\]
+
+This singularity is the mathematical signature of the liquidation constraint: the optimizer must trade at an infinitely high rate in the limit to satisfy $x_T = 0$.
+
+% -------------------------------------------------------
+\section{Parameter Calibration from LOBSTER Data}
+\label{app:calibration}
+
+\subsection{Data Format}
+
+The LOBSTER dataset \cite{huang2011lobster} provides tick-level limit order book snapshots. Each snapshot records the best $L$ bid and ask price--quantity pairs (up to $L=10$ levels), as well as a message file recording every order submission, cancellation, and execution. From these files we construct:
+\begin{itemize}
+\item a \emph{mid-price} series $M_k = (a_k^{(1)} + b_k^{(1)})/2$, where $a_k^{(1)}$ and $b_k^{(1)}$ are the best ask and bid at snapshot $k$;
+\item a \emph{realized variance} series via 5-minute rolling windows;
+\item a \emph{volume-weighted average price} (VWAP) for calibrating market impact.
+\end{itemize}
+
+\subsection{Volatility Parameters ($\sigma^2$, $\theta$, $\omega$, $\xi$, $\rho$)}
+
+\paragraph{Spot variance $\sigma^2$.}
+Estimate from intraday log-returns $r_k = \log(M_k/M_{k-1})$ over the relevant trading window:
+\[
+\hat\sigma^2 = \frac{1}{\tau}\cdot\frac{1}{K-1}\sum_{k=1}^K r_k^2.
+\]
+
+\paragraph{Heston parameters via method of moments.}
+The continuous-time variance process $v_t$ implies the following moment conditions:
+\begin{align*}
+\mathbb{E}[v_t] &= \omega, \\
+\mathrm{Var}[v_t] &= \frac{\xi^2\omega}{2\theta}, \\
+\mathrm{Cov}(v_t, v_{t+s}) &= \frac{\xi^2\omega}{2\theta}e^{-\theta s}.
+\end{align*}
+
+Using sample estimates from rolling-window realized variance:
+\begin{enumerate}[label=(\roman*)]
+\item Set $\hat\omega = \overline{v}$ (sample mean of realized variance).
+\item Estimate $\hat\theta$ from the slope of $\log\widehat{\mathrm{Cov}}(v_t,v_{t+s})$ vs.\ $s$.
+\item Solve for $\hat\xi$ from $\widehat{\mathrm{Var}}[v_t] = \hat\xi^2\hat\omega/(2\hat\theta)$.
+\end{enumerate}
+
+\paragraph{Leverage correlation $\hat\rho$.}
+Estimate as the sample correlation between mid-price log-returns and realized variance increments:
+\[
+\hat\rho = \mathrm{Corr}(r_k,\,\Delta v_k).
+\]
+
+\subsection{Market Impact Parameters ($\eta$, $\gamma$, $\lambda$)}
+
+\paragraph{Temporary impact $\eta$.}
+Using Kyle's lambda framework \cite{kyle1985continuous}: regress the signed trade flow $q_k$ (positive = buy, negative = sell) against the contemporaneous price change:
+\[
+\Delta M_k = \hat\eta q_k + \varepsilon_k.
+\]
+The OLS slope $\hat\eta$ estimates the cost per share per unit of trading rate.
+
+\paragraph{Permanent impact $\gamma$.}
+Fit the \emph{post-trade} price reversion to isolate the permanent component:
+\[
+M_{k+H} - M_{k-1} = \hat\gamma q_k + \varepsilon_{k,H},
+\]
+using a horizon $H$ long enough for the temporary impact to dissipate (typically $H = 30$--$60$ minutes for liquid equities).
+
+\paragraph{Risk aversion $\lambda$.}
+In the absence of a direct utility estimate, $\lambda$ is typically set by specifying a target risk tolerance. A common convention is to choose $\lambda$ such that the AC trajectory liquidates approximately half the position by the midpoint $T/2$:
+\[
+x_{T/2} = \frac{\sinh(\kappa T/2)}{\sinh(\kappa T)}X \approx \frac{X}{2},
+\]
+which can be solved numerically for $\kappa$ and hence $\lambda = \kappa^2\eta/\sigma^2$.
+
+\subsection{Calibration Stability}
+
+As noted in Section~12 of the presentation, calibration of $\eta$ and $\gamma$ from LOBSTER data proved semi-stable: the regression-based estimates exhibit day-to-day variation of $\pm 20$--$40\%$ for liquid names. We recommend a rolling-window approach with exponential smoothing to mitigate this instability:
+\[
+\hat\eta_k = (1-\alpha)\hat\eta_{k-1} + \alpha\,\hat\eta_k^{\text{raw}}, \qquad \alpha \in (0,1).
+\]
+
+% -------------------------------------------------------
+\section{Implementation Shortfall Decomposition}
+\label{app:is_decomp}
+
+The total IS can be decomposed into three economically distinct components:
+\[
+\text{IS}
+=
+\underbrace{\eta\sum_{k=1}^N \frac{n_k^2}{\tau}}_{\text{temporary impact cost}}
++
+\underbrace{\frac{1}{2}\gamma X^2}_{\text{permanent impact cost}}
++
+\underbrace{\sigma^2\sum_{k=1}^N \tau x_k^2 \cdot (\text{realized draw})}_{\text{price risk realization}}.
+\]
+
+This three-way split has the following interpretation:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Component & Driver & Reduced by \\
+\midrule
+Temporary impact & Trading too fast & Slowing down \\
+Permanent impact & Total volume traded & Cannot be avoided \\
+Price risk & Holding inventory in volatile market & Trading faster \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The mean-variance objective minimizes the sum of expected temporary impact and the variance of the price risk term. The permanent impact term is a constant (independent of the trading schedule) and drops out of the optimization.
+
+\paragraph{IS decomposition under Heston.}
+When the variance $v_t$ is stochastic, the price risk realization in simulation $i$ becomes
+\[
+\text{PR}_i = \sum_{k=1}^N x_{k-1}^{(i)}\sqrt{v_{k-1}^{(i)}}\,\Delta W_k^{S,(i)},
+\]
+which has a path-dependent distribution even conditional on the same trading schedule. This additional source of randomness is precisely what the Heston-adjusted strategy attempts to mitigate by making the trading rate responsive to the current level of $v_t$.
+
+% -------------------------------------------------------
+\section{Monte Carlo Simulation Design}
+\label{app:montecarlo}
+
+\subsection{Paired Simulation Architecture}
+
+To ensure that comparisons between AC and Heston strategies are not contaminated by simulation noise, both strategies are evaluated on \emph{identical} underlying randomness. Concretely, for simulation $i$:
+\begin{enumerate}[label=(\roman*)]
+\item Draw the common random vectors $\{(Z_1^k, Z_2^k)\}_{k=1}^N$.
+\item Construct the Heston price path $(S_k^{(i)}, v_k^{(i)})_{k=0}^N$ using Appendix~\ref{app:euler}.
+\item For the \textbf{AC strategy}: compute the static trajectory $n_k^{\text{AC}}$ at time $0$ using the initial $v_0$; evaluate IS against the realized Heston price path.
+\item For the \textbf{Heston strategy}: compute the dynamic rate $n_k^{\text{Heston}}$ at each step using the current $(t_k, x_k, v_k)$; evaluate IS against the same Heston price path.
+\end{enumerate}
+
+This paired construction ensures that $IS_{\text{AC}}^{(i)} - IS_{\text{Heston}}^{(i)}$ reflects the pure effect of adaptive versus static scheduling, not random differences in market conditions.
+
+\subsection{Variance Reduction: Antithetic Variates}
+
+For each random seed, we additionally simulate the \emph{antithetic} path using $(-Z_1^k, -Z_2^k)$ \cite{glasserman2004monte} and average:
+\[
+\widehat{IS} = \frac{IS(\omega) + IS(-\omega)}{2}.
+\]
+This halves the variance of the IS estimator under symmetry of the price process and typically reduces required sample size by 30--50\% for a given precision target.
+
+\subsection{Sample Size and Convergence}
+
+The standard error of the paired IS mean is
+\[
+\mathrm{SE} = \frac{s_d}{\sqrt{M}},
+\]
+where $s_d$ is the sample standard deviation of the paired differences and $M$ is the number of simulation pairs. For a 95\% confidence interval half-width of $\epsilon$ on the IS difference, the required sample size is approximately
+\[
+M \geq \left(\frac{1.96\,s_d}{\epsilon}\right)^2.
+\]
+
+In practice $s_d$ must be estimated from a pilot run. The observed IS standard deviations in this study ($\sim 10^7$--$10^8$ dollars on notional positions of $\sim 10^5$ shares) imply that $M \geq 10{,}000$ simulations are needed for reliable inference at the 1\% level.
+
+% -------------------------------------------------------
+\section{Volatility Regime Partitioning}
+\label{app:regimes}
+
+\subsection{Regime Construction}
+
+The realized volatility series $\{\hat\sigma_i\}_{i=1}^n$ is formed by computing the intraday realized volatility for each simulation draw:
+\[
+\hat\sigma_i = \sqrt{\frac{1}{N}\sum_{k=1}^N v_{k-1}^{(i)}}.
+\]
+
+Simulations are then sorted by $\hat\sigma_i$ and partitioned into three terciles of equal size ($n/3$ observations each), yielding:
+\begin{itemize}
+\item \textbf{Low-vol regime}: $\hat\sigma_i \in [0.107, 0.190]$, $n = 3{,}333$ simulations.
+\item \textbf{Mid-vol regime}: $\hat\sigma_i \in (0.190, 0.221]$, $n = 3{,}333$ simulations.
+\item \textbf{High-vol regime}: $\hat\sigma_i \in (0.221, 0.381]$, $n = 3{,}333$ simulations.
+\end{itemize}
+
+\subsection{Within-Regime Tests}
+
+For each regime $r$, a one-sided Wilcoxon signed-rank test is applied to the paired IS differences $\{d_i^{(r)}\}$ with hypothesis
+\[
+H_0^{(r)}: \mathrm{median}(d_i^{(r)}) \geq 0
+\qquad\text{vs.}\qquad
+H_1^{(r)}: \mathrm{median}(d_i^{(r)}) < 0.
+\]
+
+Rejection of $H_0^{(r)}$ indicates that the Heston strategy achieves lower IS than AC in regime $r$. As reported in Section~10.3, only the low-vol regime rejects, and in the \emph{opposite} direction (AC outperforms Heston). This suggests that the perturbation-theoretic correction, which was derived under the assumption of small $\xi$, may overcorrect in low-volatility environments where the Heston dynamics deviate most from the constant-$\sigma$ baseline.
+
+\subsection{Regime Dependence and Model Risk}
+
+The regime analysis reveals an important asymmetry: the Heston strategy provides no statistically significant advantage in high-volatility conditions, despite being designed precisely for those conditions. Several explanations are plausible:
+
+\begin{enumerate}[label=(\roman*)]
+\item \textbf{Parameter estimation error}: The Heston parameters $(\theta, \omega, \xi)$ are more difficult to calibrate reliably in high-volatility regimes, and miscalibration of $\xi$ can cause the first-order correction to point in the wrong direction.
+\item \textbf{Higher-order terms}: The perturbation expansion discards $O(\xi^2)$ terms. In high-$\xi$ environments these may be non-negligible.
+\item \textbf{Path filtering}: Explosive variance paths are more likely to be removed in high-vol regimes, potentially biasing the surviving sample toward cases where the two strategies perform similarly.
+\end{enumerate}
+
+% -------------------------------------------------------
+\section{Statistical Tests: Full Definitions and Hypotheses}
+\label{app:stats}
+
+\subsection{Paired $t$-Test}
+
+\paragraph{Setup.} Let $d_i = IS_{\text{AC}}^{(i)} - IS_{\text{Heston}}^{(i)}$ be the paired IS differences across $M$ simulations. Assume $d_i \overset{\text{iid}}{\sim} \mathcal{N}(\mu_d, \sigma_d^2)$.
+
+\paragraph{Hypothesis.}
+\[
+H_0: \mu_d \leq 0 \qquad \text{vs.} \qquad H_1: \mu_d > 0.
+\]
+
+\paragraph{Test statistic.}
+\[
+t = \frac{\bar{d}}{s_d/\sqrt{M}} \sim t_{M-1} \text{ under } H_0.
+\]
+
+\paragraph{Interpretation.} A one-sided $p$-value above $0.05$ means we cannot conclude that the Heston strategy achieves strictly lower expected IS than AC \cite{lehmann2005testing}.
+
+\subsection{Wilcoxon Signed-Rank Test}
+
+The Wilcoxon test \cite{lehmann2005testing} is the nonparametric analogue of the paired $t$-test. It requires only that the $d_i$ have a symmetric distribution, not normality.
+
+\paragraph{Procedure.}
+\begin{enumerate}[label=(\roman*)]
+\item Rank the absolute differences $|d_i|$ from smallest to largest, breaking ties by averaging ranks.
+\item Compute $W^+ = \sum_{d_i > 0} \mathrm{rank}(|d_i|)$ and $W^- = \sum_{d_i < 0} \mathrm{rank}(|d_i|)$.
+\item Under $H_0$ of no difference, $W^+$ and $W^-$ are symmetrically distributed with mean $M(M+1)/4$.
+\end{enumerate}
+
+\paragraph{Large-sample approximation.} For $M \geq 25$,
+\[
+z = \frac{W^+ - M(M+1)/4}{\sqrt{M(M+1)(2M+1)/24}} \overset{d}{\to} \mathcal{N}(0,1).
+\]
+
+\subsection{Levene's Test for Equality of Variance}
+
+\paragraph{Hypothesis.}
+\[
+H_0: \mathrm{Var}[IS_{\text{AC}}] = \mathrm{Var}[IS_{\text{Heston}}] \qquad \text{vs.} \qquad H_1: \mathrm{Var}[IS_{\text{AC}}] > \mathrm{Var}[IS_{\text{Heston}}].
+\]
+
+\paragraph{Procedure.} Define the absolute deviations from the group median:
+\[
+z_{ij} = |IS_{ij} - \tilde{m}_j|, \quad j \in \{\text{AC, Heston}\}.
+\]
+
+Apply a two-sample $t$-test to $\{z_{i,\text{AC}}\}$ vs.\ $\{z_{i,\text{Heston}}\}$. The resulting $F$-statistic is the Levene statistic \cite{levene1960robust}\cite{brown1974robust}.
+
+\paragraph{Note.} Using the median (rather than the mean) as the centering point gives Brown--Forsythe's version of the test, which is more robust to heavy-tailed distributions---important here given the occasional large IS realizations.
+
+\subsection{Kolmogorov--Smirnov Two-Sample Test}
+
+\paragraph{Hypothesis.}
+\[
+H_0: F_{\text{AC}} = F_{\text{Heston}} \qquad \text{vs.} \qquad H_1: F_{\text{AC}} \neq F_{\text{Heston}}.
+\]
+
+\paragraph{Test statistic.}
+\[
+D_{M,M} = \sup_{x \in \mathbb{R}}\bigl|\hat{F}_{\text{AC}}(x) - \hat{F}_{\text{Heston}}(x)\bigr|,
+\]
+where $\hat{F}$ denotes the empirical CDF. Under $H_0$,
+\[
+\sqrt{M/2}\,D_{M,M} \overset{d}{\to} K,
+\]
+where $K$ is the Kolmogorov distribution \cite{kolmogorov1933sulla}\cite{smirnov1948table}.
+
+\paragraph{Interpretation.} A large $D$ indicates that the IS distributions have different shapes, not just different means. The observed $D = 0.507$ is very large (maximum possible is 1.0), confirming that the two strategies produce fundamentally different execution-cost profiles even though their \emph{means} are statistically indistinguishable.
+
+\subsection{Sharpe-Like Reliability Ratio}
+
+The Sharpe-like reliability ratio for strategy $j$ on dataset $d$ is defined as
+\[
+\mathcal{R}_{j,d} = \frac{\overline{IS}_{j,d}}{s_{IS_{j,d}}},
+\]
+where $\overline{IS}_{j,d}$ and $s_{IS_{j,d}}$ are the mean and standard deviation of IS across simulations for strategy $j$ on dataset $d$. A \emph{less negative} ratio indicates more consistent (lower-variance, lower-mean) execution.
+
+The across-dataset comparison tests
+\[
+H_0: \mathbb{E}[\mathcal{R}_{\text{AC}}] \geq \mathbb{E}[\mathcal{R}_{\text{Heston}}]
+\qquad \text{vs.} \qquad
+H_1: \mathbb{E}[\mathcal{R}_{\text{AC}}] < \mathbb{E}[\mathcal{R}_{\text{Heston}}].
+\]
+
+The paired $t$-statistic $t = 2.876$ with $p = 0.006$ rejects $H_0$, indicating the Heston model achieves superior risk-adjusted execution consistency across diverse market environments.
+
+\subsection{Conditional Value-at-Risk via Bootstrap}
+
+The CVaR at confidence level $\alpha$ \cite{rockafellar2000cvar} is
+\[
+\mathrm{CVaR}_\alpha = \mathbb{E}\bigl[IS \mid IS > \mathrm{VaR}_\alpha\bigr],
+\qquad \mathrm{VaR}_\alpha = \inf\{x : P(IS \leq x) \geq \alpha\}.
+\]
+
+For $\alpha \in \{0.95, 0.99\}$, we estimate $\mathrm{CVaR}_\alpha$ from the empirical tail:
+\[
+\widehat{\mathrm{CVaR}}_\alpha = \frac{1}{\lceil(1-\alpha)M\rceil}\sum_{i=\lceil\alpha M\rceil}^M IS_{(i)},
+\]
+where $IS_{(1)} \leq \cdots \leq IS_{(M)}$ are the order statistics.
+
+Confidence intervals for the CVaR difference $\mathrm{CVaR}_\alpha^{\text{AC}} - \mathrm{CVaR}_\alpha^{\text{Heston}}$ are obtained via the percentile bootstrap with $B = 2{,}000$ resamples \cite{efron1993bootstrap}.
+
+\printbibliography
+
+\end{document}
+
