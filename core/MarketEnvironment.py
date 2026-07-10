@@ -184,7 +184,7 @@ class MarketEnvironment:
             v[k + 1] = max(v[k + 1], 0.0)
 
         return S, v
-    def __init__(self, S0, sigma, T, N, gamma, eta):
+    def __init__(self, S0, sigma, T, N, gamma, eta, heston_params=None):
         """
         Market environment for Almgren-Chriss style execution.
 
@@ -202,6 +202,9 @@ class MarketEnvironment:
             Permanent market impact coefficient
         eta : float
             Temporary market impact coefficient
+        heston_params : dict, optional
+            Heston model parameters with keys v0, mu, theta, omega, xi, rho.
+            If None, sensible defaults are used.
         """
         self.S0 = S0
         self.sigma = sigma
@@ -211,6 +214,14 @@ class MarketEnvironment:
         self.eta = eta
         self.dt = T / N
         self.sqrt_dt = np.sqrt(self.dt)
+        self.heston_params = heston_params or {
+            "v0": 0.04,
+            "mu": 0.0,
+            "theta": 2.0,
+            "omega": 0.04,
+            "xi": 0.3,
+            "rho": -0.7,
+        }
 
     def simulate_unaffected_price_abm(self, seed=None):
         """

@@ -46,83 +46,48 @@ class ModelComparator:
             gamma = m.gamma,
         )
     
-    def _run_ac_paths(self, trades, rng):
-        """
-        Evaluate a trading strategy on GBM price paths.
-        Returns an IS array of length num_sims.
-        """
-        is_samples = np.full(self.num_sims, np.nan)
-        for i in range(self.num_sims):
-            path_seed = int(rng.integers(0, 1_000_000_000))
-            price_path = self.market_env.simulate_unaffected_price_abm(seed=path_seed)
-            try:
-                total_cash = self.market_env.apply_market_impact(price_path, trades)
-                is_val = self.market_env.implementation_shortfall(
-                    self.model_ac.X, total_cash["total_cash"]
-                )
-                if not np.isfinite(is_val):
-                    raise ValueError("non-finite implementation shortfall")
-                is_samples[i] = is_val
-            except Exception as exc:
-                print(f"Warning: invalid AC path {i}: {exc}")
-                is_samples[i] = np.nan
-        return is_samples
-    
-    def _run_heston_paths(self, trades, rng):
-        """
-        Evaluate a trading strategy on Heston price paths.
-        Returns an IS array of length num_sims, plus a realized volatility
-        summary for each path to use in regime analysis.
-        """
+    def _simulate_heston_path(self, path_seed, path_index):
+        """Generate one shared Heston path for paired strategy evaluation."""
         h = self.model_hest
-        is_samples = np.full(self.num_sims, np.nan)
-        regime_vols = np.full(self.num_sims, np.nan)
-        for i in range(self.num_sims):
-            path_seed = int(rng.integers(0, 1_000_000_000))
-            price_path, variance_path = self.market_env.simulate_unaffected_price_heston(
-                v0    = h.v0,
-                mu    = h.mu,
-                theta = h.theta,
-                omega = h.omega,
-                xi    = h.xi,
-                rho   = h.rho,
-                seed  = path_seed,
+        price_path, variance_path = self.market_env.simulate_unaffected_price_heston(
+            v0=h.v0,
+            mu=h.mu,
+            theta=h.theta,
+            omega=h.omega,
+            xi=h.xi,
+            rho=h.rho,
+            seed=path_seed,
+        )
+
+        if not np.all(np.isfinite(variance_path)):
+            print(f"Warning: invalid Heston variance path {path_index} contains non-finite values")
+            return None, None, np.nan
+
+        if not np.all(np.isfinite(price_path)):
+            print(f"Warning: invalid Heston price path {path_index} contains non-finite values")
+            return None, None, np.nan
+
+        if np.nanmax(price_path) > self.market_env.S0 * 2.0 or np.nanmin(price_path) < self.market_env.S0 * 0.2:
+            print(f"Warning: Heston price path {path_index} is implausible (extreme price move)")
+            return None, None, np.nan
+
+        path_vols = np.sqrt(np.maximum(variance_path, 0.0))
+        regime_vol = float(np.mean(path_vols))
+        return price_path, variance_path, regime_vol
+
+    def _evaluate_trades_on_price_path(self, trades, price_path, label, path_index):
+        """Apply one trade schedule to one shared price path."""
+        try:
+            total_cash = self.market_env.apply_market_impact(price_path, trades)
+            is_val = self.market_env.implementation_shortfall(
+                self.model_ac.X, total_cash["total_cash"]
             )
-
-            if not np.all(np.isfinite(variance_path)):
-                print(f"Warning: invalid Heston variance path {i} contains non-finite values")
-                is_samples[i] = np.nan
-                regime_vols[i] = np.nan
-                continue
-
-            # Discard numerically invalid or absurd paths before IS calculation
-            if not np.all(np.isfinite(price_path)):
-                print(f"Warning: invalid Heston price path {i} contains non-finite values")
-                is_samples[i] = np.nan
-                regime_vols[i] = np.nan
-                continue
-
-            if np.nanmax(price_path) > self.market_env.S0 * 2.0 or np.nanmin(price_path) < self.market_env.S0 * 0.2:
-                print(f"Warning: Heston price path {i} is implausible (extreme price move)")
-                is_samples[i] = np.nan
-                regime_vols[i] = np.nan
-                continue
-
-            try:
-                total_cash = self.market_env.apply_market_impact(price_path, trades)
-                is_val = self.market_env.implementation_shortfall(
-                    self.model_ac.X, total_cash["total_cash"]
-                )
-                if not np.isfinite(is_val):
-                    raise ValueError("non-finite implementation shortfall")
-                is_samples[i] = is_val
-            except Exception as exc:
-                print(f"Warning: invalid Heston path {i}: {exc}")
-                is_samples[i] = np.nan
-
-            path_vols = np.sqrt(np.maximum(variance_path, 0.0))
-            regime_vols[i] = float(np.mean(path_vols))
-        return is_samples, regime_vols
+            if not np.isfinite(is_val):
+                raise ValueError("non-finite implementation shortfall")
+            return is_val
+        except Exception as exc:
+            print(f"Warning: invalid {label} path {path_index}: {exc}")
+            return np.nan
 
     def _filter_valid_pairs(self, is_ac, is_hest, starting_vols):
         mask = np.isfinite(is_ac) & np.isfinite(is_hest)
@@ -139,8 +104,8 @@ class ModelComparator:
     def run_comparison(self, stat_kwargs=None):
         """
         Run Monte Carlo comparison:
-        1. Classic AC strategy under GBM (Baseline)
-        2. Heston-Corrected AC strategy under Heston dynamics
+        1. Classic AC strategy under Heston dynamics (Baseline)
+        2. Heston-Corrected AC strategy under Heston dynamics (Challenger)
  
         Returns
         -------
@@ -157,17 +122,30 @@ class ModelComparator:
         # 2. Challenger: Heston-Corrected trades
         trades_corrected = self.model_ac.compute_trade_list(use_correction=True)
 
-        # Seed the two RNGs from the same base so the experiment is reproducible
-        rng_ac   = np.random.default_rng(self.seed)
-        rng_hest = np.random.default_rng(
-            None if self.seed is None else self.seed + 1
-        )
+        rng = np.random.default_rng(self.seed)
+        is_ac = np.full(self.num_sims, np.nan)
+        is_heston = np.full(self.num_sims, np.nan)
+        starting_vols = np.full(self.num_sims, np.nan)
 
-        print(f"Running {self.num_sims} Classic AC (GBM) paths ...")
-        is_ac = self._run_ac_paths(trades_classic, rng_ac)
- 
-        print(f"Running {self.num_sims} Corrected Heston-AC (Heston) paths ...")
-        is_heston, starting_vols = self._run_heston_paths(trades_corrected, rng_hest)
+        print(f"Running {self.num_sims} paired Heston-path simulations ...")
+        for i in range(self.num_sims):
+            path_seed = int(rng.integers(0, 1_000_000_000))
+            price_path, variance_path, regime_vol = self._simulate_heston_path(path_seed, i)
+
+            if price_path is None:
+                continue
+
+            starting_vols[i] = regime_vol
+            is_ac[i] = self._evaluate_trades_on_price_path(
+                trades_classic, price_path, "AC", i
+            )
+            corrected_trades = self.model_ac.compute_trade_list(
+                use_correction=True,
+                variance_path=variance_path,
+            )
+            is_heston[i] = self._evaluate_trades_on_price_path(
+                corrected_trades, price_path, "Heston", i
+            )
  
         is_ac, is_heston, starting_vols = self._filter_valid_pairs(is_ac, is_heston, starting_vols)
  

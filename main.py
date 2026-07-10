@@ -224,12 +224,31 @@ def list_datasets():
     datasets = []
     seen_bases = set()
 
+    def is_lobster_directory(path):
+        if not os.path.isdir(path):
+            return False
+
+        try:
+            child_names = os.listdir(path)
+        except OSError:
+            return False
+
+        has_message = any(
+            "_message_" in child and child.lower().endswith(".csv")
+            for child in child_names
+        )
+        has_orderbook = any(
+            "_orderbook_" in child and child.lower().endswith(".csv")
+            for child in child_names
+        )
+        return has_message and has_orderbook
+
     # Prefer extracted directories over zip archives with the same base name
     for name in entries:
         path = os.path.join(data_dir, name)
         base_name, ext = os.path.splitext(name)
 
-        if os.path.isdir(path):
+        if is_lobster_directory(path):
             datasets.append(os.path.abspath(path))
             seen_bases.add(name)
             seen_bases.add(base_name)
@@ -278,12 +297,6 @@ def estimate_parameters_from_dataset(dataset_path):
     sigma = calibrator.estimate_volatility(df)
     impact_params = calibrator.estimate_impact_parameters(df)
     heston_params = calibrator.estimate_heston_parameters(df)
-
-    if heston_params is not None:
-        heston_params['xi'] = min(heston_params['xi'], 0.8)
-        heston_params['omega'] = max(heston_params['omega'], 0.1)
-        heston_params['v0'] = max(heston_params['v0'], 0.0001)
-        heston_params['theta'] = max(heston_params['theta'], 0.0001)
 
     estimated_eta = impact_params.get("eta") if impact_params else None
     estimated_gamma = impact_params.get("gamma") if impact_params else None
@@ -375,7 +388,10 @@ def build_objects(params, lambd):
         eta=params["eta"],
         gamma=params["gamma"],
         xi=xi,
-        rho=rho
+        rho=rho,
+        v0=heston_params.get("v0") if isinstance(heston_params, dict) else None,
+        theta=heston_params.get("theta") if isinstance(heston_params, dict) else None,
+        omega=heston_params.get("omega") if isinstance(heston_params, dict) else None,
     )
 
     env = me.MarketEnvironment(
@@ -384,7 +400,8 @@ def build_objects(params, lambd):
         T=params["T"],
         N=params["N"],
         gamma=params["gamma"],
-        eta=params["eta"]
+        eta=params["eta"],
+        heston_params=heston_params if isinstance(heston_params, dict) else None,
     )
 
     sim = m.MonteCarloSimulator(

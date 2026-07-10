@@ -27,25 +27,30 @@ class Backtester:
         summary : dict
             Summary statistics
         """
+        # Market path — use calibrated Heston parameters from the market environment
+        h = self.market.heston_params
+        prices, variances = self.market.simulate_unaffected_price_heston(
+            v0=h.get("v0", 0.04),
+            mu=h.get("mu", 0.0),
+            theta=h.get("theta", 2.0),
+            omega=h.get("omega", 0.04),
+            xi=h.get("xi", 0.3),
+            rho=h.get("rho", -0.7),
+            seed=seed
+        )
+
         # Strategy outputs
         times = self.strategy.times
-        trades = self.strategy.compute_trade_list(use_correction=use_correction)
-        
+        trades = self.strategy.compute_trade_list(
+            use_correction=use_correction,
+            variance_path=variances if use_correction else None,
+        )
+
         # Recalculate inventory path from trades for consistency
         inventory_path = np.zeros(self.strategy.N + 1)
         inventory_path[0] = self.strategy.X
         for k in range(self.strategy.N):
             inventory_path[k+1] = inventory_path[k] - trades[k]
-
-        # Market path
-        prices, variances = self.market.simulate_unaffected_price_heston(
-        v0=0.04,
-        mu=0.0,
-        theta=2.0,
-        omega=0.04,
-        xi=0.3,
-        rho=-0.7,
-        seed=seed)
 
         rows = []
         cumulative_sold = 0.0

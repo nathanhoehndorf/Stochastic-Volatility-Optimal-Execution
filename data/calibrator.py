@@ -562,7 +562,8 @@ class LobsterCalibrator:
                 "rho": return/variance-shock correlation,
             }
         """
-        vol_series = self._estimate_volatility_series(df, window="1min")
+        window = "1min"
+        vol_series = self._estimate_volatility_series(df, window=window)
 
         if vol_series is None or len(vol_series) < 50:
             print("Warning: Insufficient volatility data for Heston estimation")
@@ -570,6 +571,11 @@ class LobsterCalibrator:
 
         var_series = (vol_series ** 2).replace([np.inf, -np.inf], np.nan).dropna()
         var_series = var_series[var_series > 0]
+
+        # Convert local-interval variance to execution-window variance.
+        # Project convention: T = 1 corresponds to one trading day.
+        intervals_per_day = self._intervals_per_day(window)
+        var_series = var_series * intervals_per_day
 
         if len(var_series) < 50:
             print("Warning: Insufficient variance data for Heston estimation")

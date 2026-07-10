@@ -60,7 +60,10 @@ class MonteCarloSimulator:
             eta=self.eta,
             gamma=self.gamma,
             xi=h.get("xi"),
-            rho=h.get("rho")
+            rho=h.get("rho"),
+            v0=h.get("v0"),
+            theta=h.get("theta"),
+            omega=h.get("omega"),
         )
 
         market = me.MarketEnvironment(
@@ -72,9 +75,8 @@ class MonteCarloSimulator:
             eta=self.eta
         )
 
-        trades = strategy.compute_trade_list(use_correction=use_correction)
-        inventory = (strategy.compute_perturbed_inventory_trajectory() 
-                     if use_correction else strategy.compute_inventory_trajectory())
+        trades = strategy.compute_trade_list(use_correction=False)
+        inventory = strategy.compute_inventory_trajectory()
 
         is_samples = np.zeros(n_sims)
 
@@ -88,6 +90,18 @@ class MonteCarloSimulator:
                 rho   = h.get("rho", -0.7),
                 seed  = None if seed is None else int(rng.integers(0, 1_000_000_000))
             )
+
+            if use_correction:
+                trades = strategy.compute_trade_list(
+                    use_correction=True,
+                    variance_path=variance_path,
+                )
+                if i == 0:
+                    inventory = strategy.compute_perturbed_inventory_trajectory(
+                        variance_path=variance_path,
+                    )
+            elif i == 0:
+                trades = strategy.compute_trade_list(use_correction=False)
             
             total_cash_dict = market.apply_market_impact(price_path, trades)
             total_cash = total_cash_dict['total_cash']
